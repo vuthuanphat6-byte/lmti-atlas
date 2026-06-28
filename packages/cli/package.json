@@ -1,0 +1,18 @@
+{
+  "name": "lmti",
+  "version": "0.0.0",
+  "private": false,
+  "bin": {
+    "lmti": "dist/index.js",
+    "atlas": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "dependencies": {
+    "@atlas/compiler": "workspace:*",
+    "@atlas/kernel": "workspace:*",
+    "@atlas/memory": "workspace:*",
+    "@atlas/privacy": "workspace:*",
+    "@atlas/types": "workspace:*"
+  }
+}

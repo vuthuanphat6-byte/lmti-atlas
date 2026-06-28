@@ -1,0 +1,43 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.token
+secrets/
+credentials/
+
+# Local runtime data
+.lmti/
+.atlas/
+.agents/
+.codex/
+*.log
+logs/
+tmp/
+temp/
+.cache/
+
+# Dependency folders
+node_modules/
+.pnpm-store/
+.venv/
+venv/
+__pycache__/
+
+# Build output
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

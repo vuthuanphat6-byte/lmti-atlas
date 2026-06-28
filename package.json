@@ -1,0 +1,29 @@
+{
+  "name": "atlas-root",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@10.13.1",
+  "description": "ATLAS MVP-0: local Knowledge Compiler and Artificial Mind Format",
+  "scripts": {
+    "build": "tsc -b packages/types packages/graph packages/privacy packages/memory packages/security packages/tools packages/agents packages/context packages/compiler packages/kernel packages/mcp packages/reasoning packages/runtime packages/cli apps/playground apps/codex-assistant",
+    "clean": "tsc -b --clean packages/types packages/graph packages/privacy packages/memory packages/security packages/tools packages/agents packages/context packages/compiler packages/kernel packages/mcp packages/reasoning packages/runtime packages/cli apps/playground apps/codex-assistant",
+    "test": "vitest run --dir packages",
+    "playground": "node apps/playground/dist/index.js",
+    "playground:scenario": "node apps/playground/dist/index.js --scenario",
+    "codex:assistant": "node apps/codex-assistant/dist/index.js",
+    "codex:ask": "node apps/codex-assistant/dist/index.js ask",
+    "codex:remember": "node apps/codex-assistant/dist/index.js remember",
+    "codex:status": "node apps/codex-assistant/dist/index.js status",
+    "codex:scenario": "node apps/codex-assistant/dist/index.js scenario"
+  },
+  "devDependencies": {
+    "@atlas/types": "workspace:*",
+    "@types/node": "^22.13.14",
+    "lmti": "workspace:*",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@lmti/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/server.js",
+  "types": "dist/server.d.ts",
+  "dependencies": {
+    "@atlas/kernel": "workspace:*",
+    "@atlas/memory": "workspace:*",
+    "@atlas/types": "workspace:*"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "references": [
+    { "path": "../types" },
+    { "path": "../compiler" },
+    { "path": "../kernel" },
+    { "path": "../memory" },
+    { "path": "../privacy" }
+  ],
+  "include": ["src/**/*.ts"]
+}

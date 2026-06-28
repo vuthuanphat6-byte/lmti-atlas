@@ -1,0 +1,16 @@
+{
+  "name": "@atlas/playground",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "atlas-playground": "dist/index.js",
+    "codex-project-assistant": "dist/index.js"
+  },
+  "dependencies": {
+    "@atlas/runtime": "workspace:*",
+    "@atlas/security": "workspace:*",
+    "@atlas/tools": "workspace:*"
+  }
+}

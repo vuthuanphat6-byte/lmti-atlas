@@ -1,0 +1,15 @@
+{
+  "name": "@atlas/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "dependencies": {
+    "@atlas/agents": "workspace:*",
+    "@atlas/context": "workspace:*",
+    "@atlas/memory": "workspace:*",
+    "@atlas/security": "workspace:*",
+    "@atlas/tools": "workspace:*",
+    "@atlas/types": "workspace:*"
+  }
+}

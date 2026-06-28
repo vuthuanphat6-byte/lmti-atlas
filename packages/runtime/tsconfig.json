@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "references": [
+    { "path": "../agents" },
+    { "path": "../context" },
+    { "path": "../memory" },
+    { "path": "../security" },
+    { "path": "../tools" },
+    { "path": "../types" }
+  ],
+  "include": ["src/**/*.ts"]
+}
