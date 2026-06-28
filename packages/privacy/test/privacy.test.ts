@@ -1,14 +1,18 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  appendAuditEvent,
   auditSensitiveAccess,
   createPrivacyContext,
   evaluateAccess,
   readAuditEvents,
   redactPII,
-  redactSecrets
+  redactSecrets,
+  retainAuditEvents,
+  runEgressSecretScan,
+  verifyAuditIntegrity
 } from "../src/index";
 
 const baseRecord = {
@@ -59,5 +63,53 @@ describe("Cognitive Privacy Layer", () => {
     expect(events[0]?.recordId).toBe("record-1");
     expect(events[0]?.sensitivity).toBe("confidential");
     expect(events[0]?.decision).toBe("summarize");
+    expect(events[0]?.hash).toBeTruthy();
+  });
+
+  it("blocks broader egress secret fixtures", () => {
+    const privateKey = "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----";
+    const result = runEgressSecretScan({
+      aws: "AKIA1234567890ABCDEF",
+      jwt: "eyJaaaaaaaaaaa.bbbbbbbbbbbbb.ccccccccccccc",
+      db: "postgres://user:pass@example.test:5432/app",
+      assignment: "api_key=abc123456",
+      privateKey
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.findings).toEqual(
+      expect.arrayContaining(["private_key", "aws_access_key", "jwt", "database_url", "secret_assignment"])
+    );
+    expect(result.redactedPreview).not.toContain("abc123456");
+    expect(result.redactedPreview).not.toContain("postgres://user:pass");
+  });
+
+  it("verifies audit tamper evidence and supports retention", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "atlas-privacy-"));
+    for (let index = 0; index < 3; index += 1) {
+      await appendAuditEvent(cwd, {
+        action: "test.audit",
+        recordId: `record-${index}`,
+        sensitivity: "internal",
+        role: "agent",
+        decision: "allow",
+        command: "test",
+        reason: `event ${index}`
+      });
+    }
+
+    await expect(verifyAuditIntegrity(cwd)).resolves.toMatchObject({ valid: true, checked: 3 });
+
+    const retention = await retainAuditEvents(cwd, 2);
+    expect(retention.retained).toBe(2);
+    expect(retention.archived).toBe(1);
+    await expect(verifyAuditIntegrity(cwd)).resolves.toMatchObject({ valid: true, checked: 2 });
+
+    const auditPath = path.join(cwd, ".lmti", "privacy", "audit.jsonl");
+    const tampered = (await readFile(auditPath, "utf8")).replace("event 2", "event tampered");
+    await writeFile(auditPath, tampered, "utf8");
+    const integrity = await verifyAuditIntegrity(cwd);
+    expect(integrity.valid).toBe(false);
+    expect(integrity.failures.some((failure) => failure.reason === "hash_mismatch")).toBe(true);
   });
 });

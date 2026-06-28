@@ -1,10 +1,19 @@
 import { promises as fs } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import type {
   AccessDecision,
   AccessRole,
   AuditEvent,
+  AuditIntegrityReport,
+  AuditRetentionResult,
+  BlockedMemory,
+  ContextEgressScan,
+  HardGateReason,
+  MemoryMetadata,
+  MetadataGateResult,
+  ObserverFrame,
+  PolicyDecision,
   PrivacyContext,
   PrivacyEvaluation,
   PrivacyPolicy,
@@ -14,6 +23,7 @@ import type {
 
 export const PRIVACY_DIR = "privacy";
 export const AUDIT_FILE = "audit.jsonl";
+export const PREFLIGHT_POLICY_VERSION = "preflight-policy-0.1.0";
 
 const POLICIES: Record<SensitivityLevel, PrivacyPolicy> = {
   public: {
@@ -76,6 +86,48 @@ export function createPrivacyContext(input: Partial<PrivacyContext> = {}): Priva
     command: input.command ?? "unknown",
     timestamp: input.timestamp ?? new Date().toISOString()
   };
+}
+
+export function inferSinkRole(modelTarget: string): AccessRole {
+  const normalized = modelTarget.trim().toLowerCase();
+  if (normalized.startsWith("local:") || normalized.startsWith("codex:local")) {
+    return "agent";
+  }
+  return "external_model";
+}
+
+export function deriveEffectiveContextRole(observerRole: AccessRole, modelTarget: string): AccessRole {
+  const sinkRole = inferSinkRole(modelTarget);
+  return stricterRole(observerRole, sinkRole);
+}
+
+export function hardGateMemoryMetadata(input: {
+  metadata: MemoryMetadata[];
+  observer: ObserverFrame;
+  privacyContext: PrivacyContext;
+  now?: Date;
+}): MetadataGateResult {
+  const allowed: MemoryMetadata[] = [];
+  const blocked: BlockedMemory[] = [];
+  const policyDecisions: PolicyDecision[] = [];
+  const now = input.now ?? new Date();
+
+  for (const memory of input.metadata) {
+    const reason = getHardBlockReason(memory, input.observer, input.privacyContext, now);
+    if (reason) {
+      const decision = createPolicyDecision(memory, "read_content", "block", reason);
+      policyDecisions.push(decision);
+      blocked.push(createBlockedMemory(memory, reason, decision.id));
+      continue;
+    }
+
+    const evaluation = evaluateAccess(memory, input.privacyContext);
+    const effect = evaluation.decision === "summarize" ? "summarize" : "allow";
+    policyDecisions.push(createPolicyDecision(memory, "read_content", effect, evaluation.reason));
+    allowed.push(memory);
+  }
+
+  return { allowed, blocked, policyDecisions };
 }
 
 export function evaluateAccess(record: PrivacyProtectedRecord, privacyContext: PrivacyContext): PrivacyEvaluation {
@@ -154,6 +206,23 @@ export function redactText(text: string): string {
   return redactPII(redactSecrets(text));
 }
 
+export function runEgressSecretScan(context: unknown): ContextEgressScan {
+  const serialized = typeof context === "string" ? context : JSON.stringify(context);
+  const findings: string[] = [];
+
+  for (const pattern of SECRET_EGRESS_PATTERNS) {
+    if (pattern.regex.test(serialized)) {
+      findings.push(pattern.id);
+    }
+  }
+
+  return {
+    blocked: findings.length > 0,
+    findings,
+    redactedPreview: redactText(serialized).slice(0, 2000)
+  };
+}
+
 export function redactBySensitivity<T extends PrivacyProtectedRecord>(record: T, privacyContext: PrivacyContext): T {
   const evaluation = evaluateAccess(record, privacyContext);
   if (evaluation.decision === "allow") {
@@ -179,26 +248,88 @@ export function createSafeSummary(record: PrivacyProtectedRecord): string {
   return `${record.sensitivity} memory${title}; raw content withheld by Cognitive Privacy Layer.`;
 }
 
-export async function appendAuditEvent(cwd: string, event: Omit<AuditEvent, "id" | "timestamp">): Promise<AuditEvent> {
-  const audit = {
+export async function appendAuditEvent(cwd: string, event: Omit<AuditEvent, "id" | "timestamp" | "sequence" | "previousHash" | "hash">): Promise<AuditEvent> {
+  await initPrivacyStorage(cwd);
+  const existing = await readAuditFile(cwd);
+  const last = existing[existing.length - 1];
+  const auditWithoutHash = {
     id: randomUUID(),
+    sequence: (last?.sequence ?? existing.length) + 1,
     timestamp: new Date().toISOString(),
+    previousHash: last?.hash,
     ...event
   };
-  await initPrivacyStorage(cwd);
+  const audit: AuditEvent = {
+    ...auditWithoutHash,
+    hash: hashAuditEvent(auditWithoutHash)
+  };
   await fs.appendFile(auditPath(cwd), `${JSON.stringify(audit)}\n`, "utf8");
   return audit;
 }
 
 export async function readAuditEvents(cwd: string, limit = 50): Promise<AuditEvent[]> {
-  await initPrivacyStorage(cwd);
-  const content = await fs.readFile(auditPath(cwd), "utf8");
-  const events = content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as AuditEvent);
+  const events = await readAuditFile(cwd);
   return events.slice(Math.max(0, events.length - limit)).reverse();
+}
+
+export async function verifyAuditIntegrity(cwd: string): Promise<AuditIntegrityReport> {
+  const events = await readAuditFile(cwd);
+  const failures: AuditIntegrityReport["failures"] = [];
+
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index];
+    if (!event.hash) {
+      failures.push({ sequence: event.sequence, id: event.id, reason: "missing_hash" });
+      continue;
+    }
+
+    const expectedHash = hashAuditEvent(event);
+    if (event.hash !== expectedHash) {
+      failures.push({ sequence: event.sequence, id: event.id, reason: "hash_mismatch" });
+    }
+
+    const previous = events[index - 1];
+    if (previous?.hash && event.previousHash !== previous.hash) {
+      failures.push({ sequence: event.sequence, id: event.id, reason: "previous_hash_mismatch" });
+    }
+
+    if (previous?.sequence !== undefined && event.sequence !== undefined && event.sequence !== previous.sequence + 1) {
+      failures.push({ sequence: event.sequence, id: event.id, reason: "sequence_gap" });
+    }
+  }
+
+  return {
+    valid: failures.length === 0,
+    checked: events.length,
+    failures,
+    checkpointPreviousHash: events[0]?.previousHash
+  };
+}
+
+export async function retainAuditEvents(cwd: string, maxEvents: number): Promise<AuditRetentionResult> {
+  if (!Number.isInteger(maxEvents) || maxEvents < 1) {
+    throw new Error("Audit retention maxEvents must be a positive integer.");
+  }
+
+  await initPrivacyStorage(cwd);
+  const events = await readAuditFile(cwd);
+  if (events.length <= maxEvents) {
+    return { retained: events.length, archived: 0 };
+  }
+
+  const archive = events.slice(0, events.length - maxEvents);
+  const retained = events.slice(events.length - maxEvents);
+  const archiveDirectory = path.resolve(cwd, ".lmti", PRIVACY_DIR, "archive");
+  await fs.mkdir(archiveDirectory, { recursive: true });
+  const archivePath = path.join(archiveDirectory, `audit-${new Date().toISOString().replace(/[:.]/g, "-")}.jsonl`);
+  await fs.writeFile(archivePath, archive.map((event) => JSON.stringify(event)).join("\n") + "\n", "utf8");
+  await fs.writeFile(auditPath(cwd), retained.map((event) => JSON.stringify(event)).join("\n") + "\n", "utf8");
+
+  return {
+    retained: retained.length,
+    archived: archive.length,
+    archivePath
+  };
 }
 
 export async function auditSensitiveAccess(
@@ -234,4 +365,117 @@ async function initPrivacyStorage(cwd: string): Promise<void> {
 
 function auditPath(cwd: string): string {
   return path.resolve(cwd, ".lmti", PRIVACY_DIR, AUDIT_FILE);
+}
+
+async function readAuditFile(cwd: string): Promise<AuditEvent[]> {
+  await initPrivacyStorage(cwd);
+  const content = await fs.readFile(auditPath(cwd), "utf8");
+  return content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as AuditEvent);
+}
+
+function hashAuditEvent(event: Partial<AuditEvent>): string {
+  const canonical = {
+    id: event.id ?? "",
+    sequence: event.sequence ?? null,
+    timestamp: event.timestamp ?? "",
+    action: event.action ?? "",
+    recordId: event.recordId ?? "",
+    sensitivity: event.sensitivity ?? "",
+    role: event.role ?? "",
+    decision: event.decision ?? "",
+    command: event.command ?? "",
+    reason: event.reason ?? "",
+    previousHash: event.previousHash ?? null
+  };
+  return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
+}
+
+const ROLE_STRENGTH: Record<AccessRole, number> = {
+  external_model: 0,
+  readonly: 1,
+  agent: 2,
+  developer: 3,
+  maintainer: 4,
+  owner: 5
+};
+
+const SECRET_EGRESS_PATTERNS: Array<{ id: string; regex: RegExp }> = [
+  { id: "private_key", regex: /-----BEGIN\s+(?:RSA\s+|EC\s+|OPENSSH\s+)?PRIVATE\s+KEY-----/i },
+  { id: "aws_access_key", regex: /\bAKIA[0-9A-Z]{16}\b/ },
+  { id: "jwt", regex: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/ },
+  { id: "database_url", regex: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s"']+/i },
+  { id: "secret_assignment", regex: /\b(api[_-]?key|secret|token|password|passwd|private[_-]?key)\b\s*[:=]\s*["']?[^"'\s]+/i }
+];
+
+function stricterRole(left: AccessRole, right: AccessRole): AccessRole {
+  return ROLE_STRENGTH[left] <= ROLE_STRENGTH[right] ? left : right;
+}
+
+function getHardBlockReason(
+  memory: MemoryMetadata,
+  observer: ObserverFrame,
+  privacyContext: PrivacyContext,
+  now: Date
+): HardGateReason | undefined {
+  if (memory.sensitivity === "secret") {
+    return "secret";
+  }
+  if (memory.promptPolicy === "do_not_prompt") {
+    return "do_not_prompt";
+  }
+  if (memory.projectId && memory.projectId !== observer.projectId) {
+    return "wrong_project";
+  }
+  if (memory.status === "deprecated") {
+    return "deprecated_as_truth";
+  }
+  if (memory.status === "pending" || memory.status === "rejected") {
+    return "pending_review";
+  }
+  if (memory.status === "expired" || (memory.expiresAt && new Date(memory.expiresAt).getTime() <= now.getTime())) {
+    return "expired";
+  }
+  if (evaluateAccess(memory, privacyContext).decision === "deny") {
+    return "unauthorized_role";
+  }
+  return undefined;
+}
+
+function createPolicyDecision(
+  memory: MemoryMetadata,
+  action: PolicyDecision["action"],
+  effect: PolicyDecision["effect"],
+  reason: string
+): PolicyDecision {
+  return {
+    id: randomUUID(),
+    memoryId: memory.id,
+    action,
+    effect,
+    reason,
+    policyVersion: PREFLIGHT_POLICY_VERSION,
+    memoryVersion: memory.version,
+    createdAt: new Date().toISOString()
+  };
+}
+
+function createBlockedMemory(memory: MemoryMetadata, reason: HardGateReason, policyDecisionId: string): BlockedMemory {
+  return {
+    memoryId: memory.id,
+    path: `${memory.scope}:${memory.id}`,
+    reason,
+    safeSummary: safeBlockedSummary(memory, reason),
+    policyDecisionId
+  };
+}
+
+function safeBlockedSummary(memory: MemoryMetadata, reason: HardGateReason): string {
+  if (reason === "secret" || reason === "do_not_prompt") {
+    return `${reason} memory blocked; raw content and sensitive title withheld.`;
+  }
+  return `${reason} memory "${redactText(memory.title)}" blocked; raw content withheld.`;
 }

@@ -6,12 +6,7 @@
     "types": ["node"]
   },
   "references": [
-    { "path": "../types" },
-    { "path": "../compiler" },
-    { "path": "../kernel" },
-    { "path": "../migration" },
-    { "path": "../memory" },
-    { "path": "../privacy" }
+    { "path": "../types" }
   ],
   "include": ["src/**/*.ts"]
 }

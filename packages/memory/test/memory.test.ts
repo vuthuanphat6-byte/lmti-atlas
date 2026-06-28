@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,13 +10,24 @@ import {
   listMemory,
   LongTermMemory,
   promoteMemory,
+  recordTaskDone,
   searchMemory,
+  searchMemoryForContext,
   ShortTermMemory
 } from "../src/index";
+import type { InferredIntent } from "@atlas/types";
 
 async function createWorkspace(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "atlas-memory-"));
 }
+
+const permissionIntent: InferredIntent = {
+  primaryIntent: "permission",
+  secondaryIntents: ["partner", "dashboard", "api"],
+  keywords: ["partner", "403", "dashboard", "summary", "least privilege", "route"],
+  negativeKeywords: ["logo", "ui asset"],
+  confidence: 0.9
+};
 
 describe("Memory Core MVP-2", () => {
   it("creates, lists and searches structured memory", async () => {
@@ -155,5 +166,136 @@ describe("Memory Core MVP-2", () => {
     await shortTerm.clear();
     expect(await shortTerm.list()).toHaveLength(0);
     expect(await longTerm.list()).toHaveLength(1);
+  });
+
+  it("summarizes internal memory by default and filters unrelated logo memory", async () => {
+    const cwd = await createWorkspace();
+    await createMemory(
+      {
+        scope: "long_term",
+        kind: "lesson",
+        title: "Partner route rule",
+        content: "Partner user must route to /partner. /dashboard/summary returning 403 is correct due to least privilege.",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["partner", "routing", "permission", "dashboard"],
+        importance: 0.9,
+        confidence: "high",
+        sensitivity: "internal",
+        promptPolicy: "summarize_only"
+      },
+      { cwd }
+    );
+    await createMemory(
+      {
+        scope: "long_term",
+        kind: "lesson",
+        title: "Dashboard logo rule",
+        content: "Dashboard logo brand image asset must stay aligned.",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["dashboard", "logo", "brand", "asset"],
+        importance: 0.9,
+        confidence: "high",
+        sensitivity: "internal",
+        promptPolicy: "summarize_only"
+      },
+      { cwd }
+    );
+
+    const result = await searchMemoryForContext("partner user bị 403 dashboard summary", { cwd, taskIntent: permissionIntent });
+
+    expect(result.results.map((entry) => entry.record.title)).toContain("Partner route rule");
+    expect(result.results.map((entry) => entry.record.title)).not.toContain("Dashboard logo rule");
+    expect(result.results[0]?.mode).toBe("summary");
+    expect(JSON.stringify(result.results)).not.toContain("/dashboard/summary returning 403 is correct");
+  });
+
+  it("excludes secret and do_not_prompt memory from context and writes privacy audit", async () => {
+    const cwd = await createWorkspace();
+    await createMemory(
+      {
+        scope: "long_term",
+        kind: "risk",
+        title: "Secret dashboard token",
+        content: "token=super-secret-dashboard-value",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["dashboard", "secret"],
+        importance: 1,
+        confidence: "high",
+        sensitivity: "secret",
+        promptPolicy: "do_not_prompt"
+      },
+      { cwd }
+    );
+
+    const result = await searchMemoryForContext("show secrets", {
+      cwd,
+      taskIntent: {
+        primaryIntent: "privacy",
+        secondaryIntents: [],
+        keywords: ["secret", "privacy"],
+        negativeKeywords: [],
+        confidence: 0.7
+      }
+    });
+
+    expect(result.results).toHaveLength(0);
+    const audit = await readFile(path.join(cwd, ".lmti", "logs", "privacy-audit.jsonl"), "utf8");
+    expect(audit).toContain("do_not_prompt memory filtered");
+    expect(audit).not.toContain("super-secret-dashboard-value");
+  });
+
+  it("blocks confidential raw context and records a task lesson", async () => {
+    const cwd = await createWorkspace();
+    await createMemory(
+      {
+        scope: "long_term",
+        kind: "risk",
+        title: "Confidential permission note",
+        content: "Confidential permission incident detail.",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["permission"],
+        importance: 0.8,
+        confidence: "high",
+        sensitivity: "confidential",
+        promptPolicy: "allow_raw"
+      },
+      { cwd }
+    );
+
+    const confidential = await searchMemoryForContext("permission incident", {
+      cwd,
+      taskIntent: permissionIntent,
+      includeRaw: true,
+      privacyContext: {
+        role: "owner",
+        projectId: "NOIR ERP",
+        purpose: "test",
+        includeSecret: false,
+        includeRaw: true,
+        command: "context",
+        timestamp: "2026-06-28T00:00:00.000Z"
+      }
+    });
+
+    expect(confidential.results[0]?.mode).toBe("summary");
+    expect(JSON.stringify(confidential.results)).not.toContain("Confidential permission incident detail.");
+
+    const task = await recordTaskDone(
+      {
+        title: "Partner route fix",
+        summary: "Documented partner routing behavior.",
+        lesson: "Partner users must route to /partner.",
+        projectId: "NOIR ERP",
+        taskIntent: permissionIntent
+      },
+      { cwd }
+    );
+    expect(task.lessonMemory?.kind).toBe("lesson");
+    const taskLog = await readFile(path.join(cwd, ".lmti", "events", "tasks.jsonl"), "utf8");
+    expect(taskLog).toContain("Partner route fix");
   });
 });

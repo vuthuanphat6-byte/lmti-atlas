@@ -51,6 +51,7 @@ const IGNORED_FILE_PATTERNS = [
   /^\.yarnrc$/i,
   /^id_rsa(?:\.pub)?$/i,
   /^id_ed25519(?:\.pub)?$/i,
+  /\.tsbuildinfo$/i,
   /\.(?:pem|key|p12|pfx|crt|cer|token)$/i
 ];
 

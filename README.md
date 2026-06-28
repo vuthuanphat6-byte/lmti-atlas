@@ -49,6 +49,29 @@ keyword-search exploration path with the files selected from compiled AMF. It
 does not claim real token savings, model-quality gains or production-grade
 Artificial Mind behavior.
 
+## Project Operating Memory
+
+LMTI is not a file dump.
+LMTI is project operating memory.
+
+It should remember:
+
+* rules
+* decisions
+* bugs
+* lessons
+* routes
+* permissions
+* deployment notes
+* debugging experience
+
+It should NOT blindly remember:
+
+* raw chat history
+* every file
+* every prompt
+* every random note
+
 ## Current Scope
 
 LMTI - Atlas is currently a local PoC for compiling project knowledge,
@@ -132,6 +155,8 @@ The report is saved to:
 * `lmti context "<task>"` returns a local JSON Context Pack.
 * `lmti experiment thinking "<task>"` saves a local exploration estimate report.
 * `lmti attach codex` updates `AGENTS.md` without deleting existing content.
+* `lmti remember` stores deliberate project lessons, rules and decisions.
+* `lmti task done` records task completion events and optional lessons.
 
 ## Intentionally Not Implemented
 
@@ -169,6 +194,8 @@ node packages/cli/dist/index.js attach codex
 node packages/cli/dist/index.js experiment thinking "fix packing label bug"
 node packages/cli/dist/index.js memory add --scope long_term --kind rule --title "Packing label rule" --content "A shipping label can only be printed when all products in the same label group are completed."
 node packages/cli/dist/index.js memory search "packing label"
+node packages/cli/dist/index.js remember --kind lesson --title "Partner route rule" --content "Partner user must route to /partner. /dashboard/summary returning 403 is correct due to least privilege." --tags partner,routing,permission,dashboard --sensitivity internal --prompt-policy summarize_only
+node packages/cli/dist/index.js task done --title "Partner route fix" --summary "Confirmed partner route behavior." --lesson "Partner user must route to /partner."
 node packages/cli/dist/index.js inspect
 node packages/cli/dist/index.js context "fix packing label bug"
 ```
@@ -241,13 +268,44 @@ LMTI writes local state to:
   memory/
     short-term.json
     long-term.json
+    lessons.json
     events.jsonl
+  events/
+    tasks.jsonl
   cache/
   logs/
 ```
 
 `.lmti/` is ignored by git because compiled cognition may contain internal
 project knowledge.
+
+## Legacy Atlas Migration
+
+Early Atlas prototypes may have written project mind state to `.atlas/`,
+`atlas/`, `project.amf.json`, `atlas.project.amf.json`, `mind.atlas` or
+`*.atlas` files. Current LMTI uses one canonical active mind:
+
+```text
+.lmti/project.amf.json
+```
+
+If you used the early Atlas prototype, run:
+
+```bash
+lmti doctor
+lmti doctor --fix
+lmti migrate --yes
+```
+
+`lmti doctor` reports duplicate Atlas/LMTI files, missing canonical files and
+conflicting AMF files. `lmti doctor --fix` recreates missing `.lmti` folders,
+normalizes config and migrates legacy state when it is safe. `lmti migrate
+--yes` copies legacy Atlas data into `.lmti` and writes a migration report to
+`.lmti/logs/migration-YYYYMMDD-HHmmss.json`.
+
+Migration never deletes old Atlas files automatically. After confirming
+`.lmti/project.amf.json` is correct, archive or remove legacy files manually if
+your project policy allows it.
 
 ## Artificial Mind Format v0
 
@@ -295,11 +353,32 @@ node packages/cli/dist/index.js context "fix packing label bug"
 
 Memory sensitivity is mandatory in the API and defaults to `internal` in the CLI.
 
+Prompt policy controls whether memory may enter a Context Pack:
+
+* `allow_raw`: raw content may appear only when sensitivity rules permit it.
+* `summarize_only`: context receives task-relevant summaries, not full memory.
+* `do_not_prompt`: memory is never sent into normal context.
+
+`lmti context` infers task intent before selecting memory. It returns
+`inferredIntent`, scores, selection reasons and `filteredOut` counts. By
+default, low-score unrelated memory is filtered; pass `--include-low-score`
+only when auditing context selection.
+
 Context safety:
 
 * `public` and `internal` memory can appear normally in context output.
 * `confidential` memory appears only as summarized metadata.
-* `secret` memory is excluded unless `--include-secret` is explicitly passed.
+* `secret` memory is excluded from normal context.
+
+Strict context privacy:
+
+* `internal` memory is summarized by default; raw internal memory requires
+  `--role owner --include-raw`.
+* `confidential` memory is always summarized in context.
+* `secret` memory is excluded from normal context; owner metadata access uses
+  `--include-secret-meta`.
+* `do_not_prompt` memory is excluded from context.
+* Context privacy filtering is audited in `.lmti/logs/privacy-audit.jsonl`.
 
 Runtime memory:
 
@@ -468,6 +547,7 @@ packages/types     AMF v0 types and constants
 packages/graph     Dependency graph helpers
 packages/compiler  Knowledge Compiler v0
 packages/kernel    Minimal Mind Kernel for AMF loading, inspection and Context Packs
+packages/migration Legacy Atlas detection, migration and storage doctor helpers
 packages/memory    Local AMF and structured memory storage
 packages/privacy   Cognitive privacy helpers
 packages/security  Runtime permission guard and audit log

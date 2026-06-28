@@ -65,6 +65,9 @@ importers:
       '@atlas/kernel':
         specifier: workspace:*
         version: link:../kernel
+      '@atlas/migration':
+        specifier: workspace:*
+        version: link:../migration
       '@atlas/memory':
         specifier: workspace:*
         version: link:../memory
@@ -122,6 +125,12 @@ importers:
       '@atlas/privacy':
         specifier: workspace:*
         version: link:../privacy
+      '@atlas/types':
+        specifier: workspace:*
+        version: link:../types
+
+  packages/migration:
+    dependencies:
       '@atlas/types':
         specifier: workspace:*
         version: link:../types

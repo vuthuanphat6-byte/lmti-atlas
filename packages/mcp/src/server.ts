@@ -1,5 +1,5 @@
-import { buildContextPack } from "@atlas/kernel";
-import { createMemory, readAmfDocument, searchMemory } from "@atlas/memory";
+import { buildContextPack, inferIntent } from "@atlas/kernel";
+import { createMemory, readAmfDocument, searchMemory, searchMemoryForContext } from "@atlas/memory";
 import type { MemorySensitivity } from "@atlas/types";
 
 export const LMTI_MCP_TOOL_NAMES = [
@@ -40,12 +40,17 @@ export function createLmtiMcpStub(options: LmtiMcpServerOptions = {}) {
     tools: LMTI_MCP_TOOL_NAMES,
     async lmti_get_project_context(input: ProjectContextInput) {
       const amf = await readAmfDocument(undefined, cwd);
-      const memories = await searchMemory(input.task, { cwd, limit: 16 });
-      return buildContextPack(amf, input.task, { memories });
+      const inferredIntent = inferIntent(input.task);
+      const memorySelection = await searchMemoryForContext(input.task, { cwd, limit: 16, taskIntent: inferredIntent });
+      return buildContextPack(amf, input.task, {
+        memories: memorySelection.results,
+        memoriesFilteredOut: memorySelection.filteredOut,
+        inferredIntent
+      });
     },
     async lmti_get_related_files(input: RelatedFilesInput) {
       const amf = await readAmfDocument(undefined, cwd);
-      const context = buildContextPack(amf, input.task);
+      const context = buildContextPack(amf, input.task, { inferredIntent: inferIntent(input.task) });
       return context.relatedFiles;
     },
     async lmti_get_memory(input: MemoryInput) {

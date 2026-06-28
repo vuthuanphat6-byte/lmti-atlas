@@ -11,6 +11,7 @@
   "dependencies": {
     "@atlas/compiler": "workspace:*",
     "@atlas/kernel": "workspace:*",
+    "@atlas/migration": "workspace:*",
     "@atlas/memory": "workspace:*",
     "@atlas/privacy": "workspace:*",
     "@atlas/types": "workspace:*"

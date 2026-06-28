@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AmfDocument } from "@atlas/types";
-import { MindKernel, buildContextPack, inspectAmf, loadAmf } from "../src/index";
+import { MindKernel, buildContextPack, inferIntent, inspectAmf, loadAmf } from "../src/index";
 
 const amf: AmfDocument = {
   version: "0.0.1",
@@ -173,5 +173,66 @@ describe("Mind Kernel", () => {
 
     expect(context.risks[0]?.evidence).toBe("Protected evidence withheld by Mind Kernel.");
     expect(context.relatedLongTermMemories).toHaveLength(0);
+  });
+
+  it("infers dashboard bug intent and penalizes unrelated logo assets", () => {
+    const dashboardAmf: AmfDocument = {
+      ...amf,
+      modules: [
+        {
+          name: "dashboard",
+          path: "src/dashboard",
+          files: ["src/dashboard/agent-errors.ts", "src/dashboard/logo-assets.ts"],
+          symbols: [],
+          dependencies: [],
+          summary: "Dashboard agent error handling.",
+          confidence: "medium"
+        }
+      ],
+      files: [
+        {
+          path: "src/dashboard/agent-errors.ts",
+          extension: ".ts",
+          kind: "source",
+          module: "dashboard",
+          sizeBytes: 100,
+          lines: 5,
+          hash: "agent",
+          summary: "Dashboard Agent error and debug handling.",
+          privacy: "internal",
+          riskFlags: []
+        },
+        {
+          path: "src/dashboard/logo-assets.ts",
+          extension: ".ts",
+          kind: "source",
+          module: "dashboard",
+          sizeBytes: 100,
+          lines: 5,
+          hash: "logo",
+          summary: "Dashboard logo brand image asset configuration.",
+          privacy: "internal",
+          riskFlags: []
+        }
+      ]
+    };
+
+    const intent = inferIntent("dashboard Agent lỗi");
+    const context = buildContextPack(dashboardAmf, "dashboard Agent lỗi", { inferredIntent: intent });
+
+    expect(intent.primaryIntent).toBe("dashboard");
+    expect(intent.secondaryIntents).toContain("bugfix");
+    expect(context.relatedFiles.map((file) => file.path)).toContain("src/dashboard/agent-errors.ts");
+    expect(context.relatedFiles.map((file) => file.path)).not.toContain("src/dashboard/logo-assets.ts");
+    expect(context.filteredOut.files).toBeGreaterThan(0);
+  });
+
+  it("does not classify generic LMTI migration work as database intent", () => {
+    const intent = inferIntent("LMTI migration intent privacy remember hook");
+    const intents = [intent.primaryIntent, ...intent.secondaryIntents];
+
+    expect(intent.primaryIntent).not.toBe("database");
+    expect(intents).toContain("privacy");
+    expect(intents).toContain("memory");
   });
 });

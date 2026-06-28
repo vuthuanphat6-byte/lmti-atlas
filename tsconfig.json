@@ -4,6 +4,7 @@
     { "path": "packages/types" },
     { "path": "packages/graph" },
     { "path": "packages/privacy" },
+    { "path": "packages/migration" },
     { "path": "packages/memory" },
     { "path": "packages/security" },
     { "path": "packages/tools" },

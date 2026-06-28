@@ -4,12 +4,46 @@ export type MemoryScope = "short_term" | "long_term";
 
 export type MemoryConfidence = "low" | "medium" | "high";
 
+export type IntentCategory =
+  | "bugfix"
+  | "deploy"
+  | "debug"
+  | "auth"
+  | "permission"
+  | "routing"
+  | "dashboard"
+  | "ui"
+  | "api"
+  | "database"
+  | "partner"
+  | "admin"
+  | "memory"
+  | "privacy"
+  | "unknown";
+
+export interface InferredIntent {
+  primaryIntent: IntentCategory;
+  secondaryIntents: IntentCategory[];
+  keywords: string[];
+  negativeKeywords: string[];
+  confidence: number;
+}
+
+export type PromptPolicy = "allow_raw" | "summarize_only" | "do_not_prompt";
+
+export type MemoryContextMode = "raw" | "summary" | "metadata_only" | "excluded";
+
 export type MemoryKind =
   | "task"
   | "decision"
   | "rule"
+  | "lesson"
   | "bug"
   | "risk"
+  | "route"
+  | "permission"
+  | "deploy_note"
+  | "debug_note"
   | "summary"
   | "preference"
   | "experience"
@@ -29,6 +63,7 @@ export interface MemoryRecord {
   importance: number;
   confidence: MemoryConfidence;
   sensitivity: MemorySensitivity;
+  promptPolicy?: PromptPolicy;
   createdAt: string;
   updatedAt: string;
   expiresAt?: string;
@@ -51,6 +86,7 @@ export type MemoryPatch = Partial<
     | "importance"
     | "confidence"
     | "sensitivity"
+    | "promptPolicy"
     | "expiresAt"
   >
 >;
@@ -60,12 +96,21 @@ export interface MemorySearchOptions {
   kind?: MemoryKind;
   includeExpired?: boolean;
   includeSecret?: boolean;
+  includeRaw?: boolean;
+  includeSecretMeta?: boolean;
+  includeLowScore?: boolean;
   limit?: number;
 }
 
 export interface MemorySearchResult {
   record: MemoryRecord;
   score: number;
+  mode?: MemoryContextMode;
+  promptPolicy?: PromptPolicy;
+  why?: string[];
+  intentMatch?: number;
+  keywordMatch?: number;
+  negativeKeywordPenalty?: number;
 }
 
 export interface ContextMemory {
@@ -79,5 +124,8 @@ export interface ContextMemory {
   importance: number;
   confidence: MemoryConfidence;
   sensitivity: MemorySensitivity;
+  promptPolicy?: PromptPolicy;
+  mode?: Exclude<MemoryContextMode, "excluded">;
+  why?: string[];
   score: number;
 }

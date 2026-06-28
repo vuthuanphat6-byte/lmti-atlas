@@ -42,6 +42,7 @@ export interface PrivacyEvaluation {
 
 export interface AuditEvent {
   id: string;
+  sequence?: number;
   timestamp: string;
   action: string;
   recordId: string;
@@ -50,4 +51,23 @@ export interface AuditEvent {
   decision: AccessDecision;
   command: string;
   reason: string;
+  previousHash?: string;
+  hash?: string;
+}
+
+export interface AuditIntegrityReport {
+  valid: boolean;
+  checked: number;
+  failures: Array<{
+    sequence?: number;
+    id?: string;
+    reason: string;
+  }>;
+  checkpointPreviousHash?: string;
+}
+
+export interface AuditRetentionResult {
+  retained: number;
+  archived: number;
+  archivePath?: string;
 }

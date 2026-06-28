@@ -81,6 +81,7 @@ async function createFixtureProject(): Promise<string> {
   );
 
   await writeFile(path.join(root, "node_modules", "ignored", "index.ts"), "export const ignored = true;", "utf8");
+  await writeFile(path.join(root, "tsconfig.tsbuildinfo"), "generated build cache", "utf8");
 
   return root;
 }
@@ -94,6 +95,7 @@ describe("Knowledge Compiler v0", () => {
     expect(amf.project.name).toBe("fixture-project");
     expect(amf.files.map((file) => file.path)).toContain("src/orders/packing.ts");
     expect(amf.files.some((file) => file.path.includes("node_modules"))).toBe(false);
+    expect(amf.files.some((file) => file.path.endsWith(".tsbuildinfo"))).toBe(false);
     expect(amf.modules.map((module) => module.name)).toContain("src/orders");
     expect(amf.dependencies.some((dependency) => dependency.specifier === "../labels/printer")).toBe(true);
     expect(amf.api.some((entry) => entry.route === "/packing/labels")).toBe(true);

@@ -2,6 +2,9 @@ export const AMF_VERSION = "0.1.0";
 
 export type {
   ContextMemory,
+  InferredIntent,
+  IntentCategory,
+  MemoryContextMode,
   MemoryConfidence,
   MemoryKind,
   MemoryPatch,
@@ -10,19 +13,46 @@ export type {
   MemorySearchOptions,
   MemorySearchResult,
   MemorySensitivity,
-  NewMemoryRecord
+  NewMemoryRecord,
+  PromptPolicy
 } from "./memory";
 
 export type {
   AccessDecision,
   AccessRole,
   AuditEvent,
+  AuditIntegrityReport,
+  AuditRetentionResult,
   PrivacyContext,
   PrivacyEvaluation,
   PrivacyPolicy,
   PrivacyProtectedRecord,
   SensitivityLevel
 } from "./privacy";
+
+export type {
+  AdapterKind,
+  AdapterManifest,
+  AdapterSandboxResult,
+  AdapterScope,
+  BlockedMemory,
+  ContextCandidate,
+  ContextCandidateStrategy,
+  ContextDecisionExplanation,
+  ContextEgressScan,
+  ContextPackage,
+  ContextRequest,
+  HardGateReason,
+  MemoryLifecycleStatus,
+  MemoryMetadata,
+  MetadataGateResult,
+  ObserverFrame,
+  PolicyAction,
+  PolicyDecision,
+  PolicyEffect,
+  PolicySafeMemoryResult,
+  PreflightResult
+} from "./preflight";
 
 export type PrivacyLevel = "public" | "internal" | "protected";
 export type Confidence = "low" | "medium" | "high";

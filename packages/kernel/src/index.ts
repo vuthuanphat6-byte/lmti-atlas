@@ -6,6 +6,8 @@ import type {
   DatabaseEntry,
   FileEntry,
   HistoryEntry,
+  InferredIntent,
+  IntentCategory,
   MemorySearchResult,
   ModuleEntry,
   RiskEntry,
@@ -14,6 +16,33 @@ import type {
 } from "@atlas/types";
 
 const KERNEL_VERSION = "0.1.0";
+const LOW_SCORE_THRESHOLD = 3;
+
+const INTENT_LEXICON: Record<IntentCategory, string[]> = {
+  bugfix: ["bug", "fix", "bugfix", "broken", "fail", "failed", "failure", "error", "exception", "loi", "lỗi", "issue"],
+  deploy: ["deploy", "deployment", "release", "build", "env", "environment", "docker", "ci", "cd", "log", "logs"],
+  debug: ["debug", "trace", "error", "exception", "stack", "risk", "investigate", "diagnose", "loi", "lỗi"],
+  auth: ["auth", "login", "logout", "session", "jwt", "token", "oauth", "password"],
+  permission: ["permission", "403", "forbidden", "unauthorized", "role", "access", "least", "privilege", "deny", "denied"],
+  routing: ["route", "routing", "router", "redirect", "path", "url", "endpoint"],
+  dashboard: ["dashboard", "summary", "metric", "panel", "agent"],
+  ui: ["ui", "ux", "screen", "button", "modal", "form", "view", "layout"],
+  api: ["api", "endpoint", "route", "http", "request", "response", "controller", "handler"],
+  database: ["database", "db", "sql", "schema", "table", "query"],
+  partner: ["partner", "vendor", "affiliate"],
+  admin: ["admin", "administrator", "backoffice"],
+  memory: ["memory", "remember", "lesson", "decision", "rule", "context"],
+  privacy: ["privacy", "secret", "confidential", "sensitive", "redact", "prompt", "policy"],
+  unknown: []
+};
+
+const NEGATIVE_KEYWORDS_BY_INTENT: Partial<Record<IntentCategory, string[]>> = {
+  dashboard: ["logo", "brand", "image", "asset"],
+  permission: ["logo", "ui asset", "brand", "image"],
+  debug: ["logo", "brand", "image", "asset"],
+  deploy: ["logo", "brand", "image", "asset"],
+  routing: ["logo", "brand", "image", "asset"]
+};
 
 export interface InspectionStats {
   project: string;
@@ -44,8 +73,13 @@ export interface ContextPack {
     compiledAt: string;
     checksum: string;
   };
-  relatedModules: Array<Pick<ModuleEntry, "name" | "path" | "summary" | "dependencies"> & { score: number }>;
-  relatedFiles: Array<Pick<FileEntry, "path" | "module" | "kind" | "summary" | "privacy" | "riskFlags"> & { score: number }>;
+  inferredIntent: InferredIntent;
+  filteredOut: {
+    files: number;
+    memories: number;
+  };
+  relatedModules: Array<Pick<ModuleEntry, "name" | "path" | "summary" | "dependencies"> & { score: number; why: string[] }>;
+  relatedFiles: Array<Pick<FileEntry, "path" | "module" | "kind" | "summary" | "privacy" | "riskFlags"> & { score: number; why: string[] }>;
   relatedApi: Array<ApiEntry & { score: number }>;
   relatedDatabase: Array<DatabaseEntry & { score: number }>;
   knownRules: Array<RuleEntry & { score: number }>;
@@ -61,6 +95,9 @@ export interface ContextPack {
 export interface ContextPackOptions {
   memories?: MemorySearchResult[];
   includeSecret?: boolean;
+  includeLowScore?: boolean;
+  inferredIntent?: InferredIntent;
+  memoriesFilteredOut?: number;
 }
 
 export class MindKernel {
@@ -131,52 +168,139 @@ export function formatInspection(stats: InspectionStats): string {
   ].join("\n");
 }
 
+export function inferIntent(task: string): InferredIntent {
+  const normalized = normalizeSearchText(task);
+  const taskTokens = tokenize(task);
+  const scores = new Map<IntentCategory, number>();
+
+  for (const [intent, terms] of Object.entries(INTENT_LEXICON) as Array<[IntentCategory, string[]]>) {
+    if (intent === "unknown") {
+      continue;
+    }
+    let score = 0;
+    for (const term of terms) {
+      const normalizedTerm = normalizeSearchText(term);
+      if (normalized.includes(normalizedTerm)) {
+        score += normalizedTerm.length > 3 ? 2 : 1;
+      }
+    }
+    if (score > 0) {
+      scores.set(intent, score);
+    }
+  }
+
+  if (normalized.includes("403") || normalized.includes("forbidden")) {
+    scores.set("permission", (scores.get("permission") ?? 0) + 8);
+    scores.set("api", (scores.get("api") ?? 0) + 1);
+  }
+  if (normalized.includes("dashboard") && normalized.includes("summary")) {
+    scores.set("dashboard", (scores.get("dashboard") ?? 0) + 2);
+    scores.set("api", (scores.get("api") ?? 0) + 1);
+  }
+  if (normalized.includes("partner")) {
+    scores.set("partner", (scores.get("partner") ?? 0) + 3);
+  }
+  if (normalized.includes("dashboard") && normalized.includes("agent")) {
+    scores.set("dashboard", (scores.get("dashboard") ?? 0) + 3);
+  }
+  if (normalized.includes("loi") || normalized.includes("lỗi") || normalized.includes("error")) {
+    scores.set("bugfix", (scores.get("bugfix") ?? 0) + 3);
+    scores.set("debug", (scores.get("debug") ?? 0) + 2);
+  }
+
+  const ranked = Array.from(scores.entries()).sort((left, right) => right[1] - left[1]);
+  const primaryIntent = ranked[0]?.[0] ?? "unknown";
+  const secondaryIntents = ranked
+    .slice(1)
+    .filter(([, score]) => score > 0)
+    .map(([intent]) => intent)
+    .slice(0, 4);
+
+  const keywordSet = new Set(taskTokens);
+  for (const intent of [primaryIntent, ...secondaryIntents]) {
+    for (const keyword of expandKeywordsForIntent(intent)) {
+      keywordSet.add(keyword);
+    }
+  }
+
+  const negativeSet = new Set<string>();
+  for (const intent of [primaryIntent, ...secondaryIntents]) {
+    for (const keyword of NEGATIVE_KEYWORDS_BY_INTENT[intent] ?? []) {
+      negativeSet.add(keyword);
+    }
+  }
+
+  const totalScore = ranked.reduce((sum, [, score]) => sum + score, 0);
+  const confidence = primaryIntent === "unknown" ? 0 : Math.min(1, Math.max(0.25, (ranked[0]?.[1] ?? 0) / Math.max(4, totalScore)));
+
+  return {
+    primaryIntent,
+    secondaryIntents,
+    keywords: Array.from(keywordSet),
+    negativeKeywords: Array.from(negativeSet),
+    confidence: Number(confidence.toFixed(2))
+  };
+}
+
 export function buildContextPack(amfInput: AmfDocument, task: string, options: ContextPackOptions = {}): ContextPack {
   const amf = loadAmf(amfInput);
   const includeSecret = Boolean(options.includeSecret);
-  const keywords = tokenize(task);
+  const includeLowScore = Boolean(options.includeLowScore);
+  const inferredIntent = options.inferredIntent ?? inferIntent(task);
+  const keywords = inferredIntent.keywords.length > 0 ? inferredIntent.keywords : tokenize(task);
+  const minScore = includeLowScore ? 1 : LOW_SCORE_THRESHOLD;
   const scoredModules = amf.modules
-    .map((module) => ({ ...module, score: scoreText(keywords, [module.name, module.path, module.summary, ...module.dependencies]) }))
-    .filter((module) => module.score > 0)
+    .map((module) => ({
+      ...module,
+      ...scoreContextCandidate(inferredIntent, [module.name, module.path, module.summary, ...module.dependencies], { moduleLike: true })
+    }))
+    .filter((module) => module.score >= minScore)
     .sort(sortByScore)
     .slice(0, 8);
 
-  const scoredFiles = amf.files
-    .map((file) => ({ ...file, score: scoreText(keywords, [file.path, file.module, file.kind, file.summary, ...file.riskFlags]) }))
-    .filter((file) => file.score > 0 && (includeSecret || file.privacy !== "protected"))
+  const allScoredFiles = amf.files.map((file) => ({
+    ...file,
+    ...scoreContextCandidate(inferredIntent, [file.path, file.module, file.kind, file.summary, ...file.riskFlags], { moduleLike: true, fileKind: file.kind })
+  }));
+  const scoredFiles = allScoredFiles
+    .filter((file) => file.score >= minScore && (includeSecret || file.privacy !== "protected"))
     .sort(sortByScore)
     .slice(0, 12);
+  const filteredOutFiles = allScoredFiles.filter((file) => file.score < minScore || (!includeSecret && file.privacy === "protected")).length;
 
   const scoredApi = amf.api
-    .map((entry) => ({ ...entry, score: scoreText(keywords, [entry.name, entry.kind, entry.method ?? "", entry.route ?? "", entry.summary]) }))
-    .filter((entry) => entry.score > 0 && (includeSecret || entry.privacy !== "protected"))
+    .map((entry) => ({
+      ...entry,
+      ...scoreContextCandidate(inferredIntent, [entry.name, entry.kind, entry.method ?? "", entry.route ?? "", entry.summary], { routeLike: true })
+    }))
+    .filter((entry) => entry.score >= minScore && (includeSecret || entry.privacy !== "protected"))
     .sort(sortByScore)
     .slice(0, 8);
 
   const scoredDatabase = amf.database
-    .map((entry) => ({ ...entry, score: scoreText(keywords, [entry.name, entry.kind, entry.summary, entry.source]) }))
-    .filter((entry) => entry.score > 0 && (includeSecret || entry.privacy !== "protected"))
+    .map((entry) => ({ ...entry, ...scoreContextCandidate(inferredIntent, [entry.name, entry.kind, entry.summary, entry.source], { fileKind: "database" }) }))
+    .filter((entry) => entry.score >= minScore && (includeSecret || entry.privacy !== "protected"))
     .sort(sortByScore)
     .slice(0, 8);
 
   const scoredRules = amf.rules
-    .map((rule) => ({ ...rule, score: scoreText(keywords, [rule.text, rule.source]) }))
-    .filter((rule) => rule.score > 0)
+    .map((rule) => ({ ...rule, ...scoreContextCandidate(inferredIntent, [rule.text, rule.source]) }))
+    .filter((rule) => rule.score >= minScore)
     .sort(sortByScore)
     .slice(0, 8);
 
   const scoredRisks = amf.risks
     .map((risk) => ({
       ...sanitizeRiskForContext(risk, includeSecret),
-      score: scoreText(keywords, [risk.type, risk.message, risk.file ?? "", risk.recommendation])
+      ...scoreContextCandidate(inferredIntent, [risk.type, risk.message, risk.file ?? "", risk.recommendation], { riskLike: true })
     }))
-    .filter((risk) => risk.score > 0 || scoredFiles.some((file) => file.path === risk.file))
+    .filter((risk) => risk.score >= minScore || scoredFiles.some((file) => file.path === risk.file))
     .sort(sortByScore)
     .slice(0, 8);
 
   const scoredArchitecture = amf.architecture
-    .map((entry) => ({ ...entry, score: scoreText(keywords, [entry.kind, entry.summary, entry.source]) }))
-    .filter((entry) => entry.score > 0 || scoredModules.some((module) => entry.source === module.path || entry.summary.includes(module.name)))
+    .map((entry) => ({ ...entry, ...scoreContextCandidate(inferredIntent, [entry.kind, entry.summary, entry.source], { moduleLike: true }) }))
+    .filter((entry) => entry.score >= minScore || scoredModules.some((module) => entry.source === module.path || entry.summary.includes(module.name)))
     .sort(sortByScore)
     .slice(0, 8);
 
@@ -199,21 +323,28 @@ export function buildContextPack(amfInput: AmfDocument, task: string, options: C
       compiledAt: amf.project.compiledAt,
       checksum: amf.project.checksum
     },
-    relatedModules: scoredModules.map(({ name, path, summary, dependencies, score }) => ({
+    inferredIntent,
+    filteredOut: {
+      files: filteredOutFiles,
+      memories: options.memoriesFilteredOut ?? 0
+    },
+    relatedModules: scoredModules.map(({ name, path, summary, dependencies, score, why }) => ({
       name,
       path,
       summary,
       dependencies,
-      score
+      score,
+      why
     })),
-    relatedFiles: scoredFiles.map(({ path, module, kind, summary, privacy, riskFlags, score }) => ({
+    relatedFiles: scoredFiles.map(({ path, module, kind, summary, privacy, riskFlags, score, why }) => ({
       path,
       module,
       kind,
       summary,
       privacy,
       riskFlags,
-      score
+      score,
+      why
     })),
     relatedApi: scoredApi,
     relatedDatabase: scoredDatabase,
@@ -358,6 +489,109 @@ function recommendSteps(
   return steps;
 }
 
+function expandKeywordsForIntent(intent: IntentCategory): string[] {
+  switch (intent) {
+    case "permission":
+      return ["permission", "access", "403", "least privilege"];
+    case "routing":
+      return ["route", "routing", "redirect", "path"];
+    case "dashboard":
+      return ["dashboard", "summary", "agent"];
+    case "deploy":
+      return ["deploy", "build", "env", "logs"];
+    case "debug":
+      return ["debug", "error", "risk", "module"];
+    case "bugfix":
+      return ["bug", "fix", "error"];
+    case "api":
+      return ["api", "endpoint", "route"];
+    case "database":
+      return ["database", "schema", "table", "query"];
+    case "privacy":
+      return ["privacy", "secret", "confidential", "prompt policy"];
+    case "memory":
+      return ["memory", "lesson", "rule", "decision"];
+    default:
+      return INTENT_LEXICON[intent] ?? [];
+  }
+}
+
+function scoreContextCandidate(
+  intent: InferredIntent,
+  values: string[],
+  options: { routeLike?: boolean; moduleLike?: boolean; riskLike?: boolean; fileKind?: string } = {}
+): { score: number; why: string[] } {
+  const corpus = normalizeSearchText(values.join(" "));
+  const why: string[] = [];
+  let intentMatch = 0;
+  let routeMatch = 0;
+  let moduleMatch = 0;
+  let keywordMatch = 0;
+  let negativeKeywordPenalty = 0;
+  let kindWeight = 0;
+
+  const primaryTerms = [intent.primaryIntent, ...expandKeywordsForIntent(intent.primaryIntent)].map(normalizeSearchText);
+  if (intent.primaryIntent !== "unknown" && primaryTerms.some((term) => term && corpus.includes(term))) {
+    intentMatch = 1;
+    why.push(`matched primary intent ${intent.primaryIntent}`);
+  }
+
+  for (const secondary of intent.secondaryIntents) {
+    const secondaryTerms = [secondary, ...expandKeywordsForIntent(secondary)].map(normalizeSearchText);
+    if (secondaryTerms.some((term) => term && corpus.includes(term))) {
+      intentMatch += 0.5;
+      why.push(`matched secondary intent ${secondary}`);
+    }
+  }
+
+  if (options.routeLike || /\/[a-z0-9_-]+/i.test(corpus) || corpus.includes("route") || corpus.includes("endpoint")) {
+    if (intent.primaryIntent === "routing" || intent.secondaryIntents.includes("routing") || intent.secondaryIntents.includes("api") || intent.primaryIntent === "api") {
+      routeMatch = 1;
+      why.push("matched route/API surface");
+    }
+  }
+
+  if (options.moduleLike && intent.keywords.some((keyword) => corpus.includes(normalizeSearchText(keyword)))) {
+    moduleMatch = 1;
+    why.push("matched module or file boundary");
+  }
+
+  for (const keyword of intent.keywords) {
+    const normalizedKeyword = normalizeSearchText(keyword);
+    if (normalizedKeyword && corpus.includes(normalizedKeyword)) {
+      keywordMatch += normalizedKeyword.length > 3 ? 2 : 1;
+    }
+  }
+  if (keywordMatch > 0) {
+    why.push(`matched ${keywordMatch} keyword weight`);
+  }
+
+  for (const keyword of intent.negativeKeywords) {
+    const normalizedKeyword = normalizeSearchText(keyword);
+    if (normalizedKeyword && corpus.includes(normalizedKeyword)) {
+      negativeKeywordPenalty += 1;
+    }
+  }
+  if (negativeKeywordPenalty > 0) {
+    why.push(`penalized ${negativeKeywordPenalty} negative keyword match`);
+  }
+
+  if (options.riskLike && (intent.primaryIntent === "debug" || intent.primaryIntent === "bugfix" || intent.secondaryIntents.includes("debug"))) {
+    kindWeight += 2;
+    why.push("risk entry fits debug/bugfix intent");
+  }
+  if (options.fileKind === "database" && intent.primaryIntent === "database") {
+    kindWeight += 2;
+    why.push("database file fits database intent");
+  }
+
+  const score = intentMatch * 5 + routeMatch * 4 + moduleMatch * 3 + kindWeight + keywordMatch - negativeKeywordPenalty * 5;
+  return {
+    score: Math.max(0, Math.round(score * 10) / 10),
+    why
+  };
+}
+
 function memoryToContext(result: MemorySearchResult, includeSecret: boolean): ContextMemory {
   const { record, score } = result;
   const base = {
@@ -369,8 +603,34 @@ function memoryToContext(result: MemorySearchResult, includeSecret: boolean): Co
     importance: record.importance,
     confidence: record.confidence,
     sensitivity: record.sensitivity,
+    promptPolicy: result.promptPolicy ?? record.promptPolicy,
+    mode: result.mode && result.mode !== "excluded" ? result.mode : undefined,
+    why: result.why,
     score
   };
+
+  if (result.mode === "metadata_only") {
+    return {
+      ...base,
+      mode: "metadata_only"
+    };
+  }
+
+  if (result.mode === "summary") {
+    return {
+      ...base,
+      mode: "summary",
+      summary: record.content
+    };
+  }
+
+  if (result.mode === "raw") {
+    return {
+      ...base,
+      mode: "raw",
+      content: record.content
+    };
+  }
 
   if (record.sensitivity === "confidential") {
     return {
@@ -388,6 +648,7 @@ function memoryToContext(result: MemorySearchResult, includeSecret: boolean): Co
 
   return {
     ...base,
+    mode: "raw",
     content: record.content
   };
 }
@@ -427,8 +688,12 @@ function sortByScore<T extends { score: number }>(left: T, right: T): number {
 
 function normalizeSearchText(value: string): string {
   return value
+    .replace(/l(?:á|Ã¡)»(?:—|�)?i/giu, "loi")
+    .replace(/b(?:á|Ã¡)»(?:‹|�)?/giu, "bi")
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "d")
     .replace(/Ä‘/g, "d")
     .replace(/Ä/g, "d")
     .toLowerCase();
