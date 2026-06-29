@@ -12,6 +12,7 @@ async function createFixtureProject(): Promise<string> {
   await mkdir(path.join(root, "src", "labels"), { recursive: true });
   await mkdir(path.join(root, "src", "api"), { recursive: true });
   await mkdir(path.join(root, "database"), { recursive: true });
+  await mkdir(path.join(root, "tools", "dtf-layout-pc"), { recursive: true });
   await mkdir(path.join(root, "node_modules", "ignored"), { recursive: true });
 
   await writeFile(
@@ -84,6 +85,8 @@ async function createFixtureProject(): Promise<string> {
 
   await writeFile(path.join(root, "node_modules", "ignored", "index.ts"), "export const ignored = true;", "utf8");
   await writeFile(path.join(root, ".env"), `OPENAI_API_KEY=${compilerSecretFixture}`, "utf8");
+  await writeFile(path.join(root, "wp-config.php"), "<?php define('DB_PASSWORD', 'fixture-db-password');", "utf8");
+  await writeFile(path.join(root, "tools", "dtf-layout-pc", "config.local.json"), "{\"token\":\"fixture-local-token\"}", "utf8");
   await writeFile(path.join(root, "tsconfig.tsbuildinfo"), "generated build cache", "utf8");
 
   return root;
@@ -99,6 +102,8 @@ describe("Knowledge Compiler v0", () => {
     expect(amf.files.map((file) => file.path)).toContain("src/orders/packing.ts");
     expect(amf.files.some((file) => file.path.includes("node_modules"))).toBe(false);
     expect(amf.files.some((file) => file.path === ".env")).toBe(false);
+    expect(amf.files.some((file) => file.path === "wp-config.php")).toBe(false);
+    expect(amf.files.some((file) => file.path.endsWith("config.local.json"))).toBe(false);
     expect(amf.files.some((file) => file.path.endsWith(".tsbuildinfo"))).toBe(false);
     expect(amf.modules.map((module) => module.name)).toContain("src/orders");
     expect(amf.dependencies.some((dependency) => dependency.specifier === "../labels/printer")).toBe(true);
@@ -108,6 +113,8 @@ describe("Knowledge Compiler v0", () => {
     expect(amf.unresolvedQuestions.length).toBeGreaterThan(0);
     expect(JSON.stringify(amf)).not.toContain("dummy-value-for-redaction-test");
     expect(JSON.stringify(amf)).not.toContain(compilerSecretFixture);
+    expect(JSON.stringify(amf)).not.toContain("fixture-db-password");
+    expect(JSON.stringify(amf)).not.toContain("fixture-local-token");
   });
 
   it("marks secret-like findings as protected risks", async () => {
