@@ -1,0 +1,30 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/types" },
+    { "path": "packages/graph" },
+    { "path": "packages/privacy" },
+    { "path": "packages/migration" },
+    { "path": "packages/memory" },
+    { "path": "packages/security" },
+    { "path": "packages/tools" },
+    { "path": "packages/agents" },
+    { "path": "packages/context" },
+    { "path": "packages/compiler" },
+    { "path": "packages/kernel" },
+    { "path": "packages/cognition" },
+    { "path": "packages/world-model" },
+    { "path": "packages/runtime" },
+    { "path": "packages/cli" }
+  ],
+  "exclude": [
+    "node_modules",
+    ".lmti",
+    ".atlas",
+    ".git",
+    "dist",
+    "build",
+    "coverage",
+    ".next"
+  ]
+}

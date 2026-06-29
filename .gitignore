@@ -1,0 +1,43 @@
+﻿# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.token
+secrets/
+credentials/
+
+# Local LMTI state
+.lmti/
+.atlas/
+.agents/
+.codex/
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+out/
+coverage/
+*.tsbuildinfo
+
+# Logs/cache
+*.log
+logs/
+tmp/
+temp/
+.cache/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,12 @@
+{
+  "name": "@atlas/compiler",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "dependencies": {
+    "@atlas/graph": "workspace:*",
+    "@atlas/privacy": "workspace:*",
+    "@atlas/types": "workspace:*"
+  }
+}
