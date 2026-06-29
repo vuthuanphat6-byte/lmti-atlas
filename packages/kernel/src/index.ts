@@ -3,10 +3,13 @@ import type {
   ApiEntry,
   ArchitectureEntry,
   ContextMemory,
+  ContextPack,
+  ContextPackOptions,
   DatabaseEntry,
   FileEntry,
   HistoryEntry,
   InferredIntent,
+  InspectionStats,
   IntentCategory,
   MemorySearchResult,
   ModuleEntry,
@@ -43,62 +46,6 @@ const NEGATIVE_KEYWORDS_BY_INTENT: Partial<Record<IntentCategory, string[]>> = {
   deploy: ["logo", "brand", "image", "asset"],
   routing: ["logo", "brand", "image", "asset"]
 };
-
-export interface InspectionStats {
-  project: string;
-  files: number;
-  modules: number;
-  dependencies: number;
-  symbols: number;
-  api: number;
-  database: number;
-  rules: number;
-  risks: number;
-  architecture: number;
-  unresolvedQuestions: number;
-  lastCompiled: string;
-  amfVersion: string;
-}
-
-export interface ContextPack {
-  task: string;
-  generatedAt: string;
-  kernel: {
-    name: "Mind Kernel";
-    version: string;
-  };
-  project: string;
-  source: {
-    amfVersion: string;
-    compiledAt: string;
-    checksum: string;
-  };
-  inferredIntent: InferredIntent;
-  filteredOut: {
-    files: number;
-    memories: number;
-  };
-  relatedModules: Array<Pick<ModuleEntry, "name" | "path" | "summary" | "dependencies"> & { score: number; why: string[] }>;
-  relatedFiles: Array<Pick<FileEntry, "path" | "module" | "kind" | "summary" | "privacy" | "riskFlags"> & { score: number; why: string[] }>;
-  relatedApi: Array<ApiEntry & { score: number }>;
-  relatedDatabase: Array<DatabaseEntry & { score: number }>;
-  knownRules: Array<RuleEntry & { score: number }>;
-  risks: Array<RiskEntry & { score: number }>;
-  architecture: Array<ArchitectureEntry & { score: number }>;
-  history: HistoryEntry[];
-  unresolvedQuestions: UnresolvedQuestionEntry[];
-  relatedShortTermMemories: ContextMemory[];
-  relatedLongTermMemories: ContextMemory[];
-  recommendedSteps: string[];
-}
-
-export interface ContextPackOptions {
-  memories?: MemorySearchResult[];
-  includeSecret?: boolean;
-  includeLowScore?: boolean;
-  inferredIntent?: InferredIntent;
-  memoriesFilteredOut?: number;
-}
 
 export class MindKernel {
   private readonly amf: AmfDocument;
@@ -606,7 +553,8 @@ function memoryToContext(result: MemorySearchResult, includeSecret: boolean): Co
     promptPolicy: result.promptPolicy ?? record.promptPolicy,
     mode: result.mode && result.mode !== "excluded" ? result.mode : undefined,
     why: result.why,
-    score
+    score,
+    activation: result.activation
   };
 
   if (result.mode === "metadata_only") {

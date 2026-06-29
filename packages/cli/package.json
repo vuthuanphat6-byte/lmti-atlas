@@ -10,10 +10,12 @@
   "types": "dist/index.d.ts",
   "dependencies": {
     "@atlas/compiler": "workspace:*",
+    "@atlas/cognition": "workspace:*",
     "@atlas/kernel": "workspace:*",
     "@atlas/migration": "workspace:*",
     "@atlas/memory": "workspace:*",
     "@atlas/privacy": "workspace:*",
-    "@atlas/types": "workspace:*"
+    "@atlas/types": "workspace:*",
+    "@atlas/world-model": "workspace:*"
   }
 }

@@ -9,7 +9,7 @@ import type {
   PromptPolicy
 } from "./memory";
 
-export type MemoryLifecycleStatus = "active" | "deprecated" | "pending" | "rejected" | "expired";
+export type MemoryLifecycleStatus = "active" | "weak" | "archived" | "superseded" | "deprecated" | "pending" | "rejected" | "expired";
 
 export type HardGateReason =
   | "secret"
@@ -17,6 +17,7 @@ export type HardGateReason =
   | "wrong_project"
   | "unauthorized_role"
   | "deprecated_as_truth"
+  | "archived"
   | "expired"
   | "pending_review"
   | "missing_source";
@@ -60,6 +61,20 @@ export interface MemoryMetadata {
   sensitivity: MemorySensitivity;
   promptPolicy: PromptPolicy;
   status: MemoryLifecycleStatus;
+  memoryStrength?: number;
+  baseActivation?: number;
+  retrievalCount?: number;
+  lastRetrievedAt?: string;
+  lastReinforcedAt?: string;
+  decayRate?: number;
+  stability?: number;
+  priorityScore?: number;
+  contextCues?: string[];
+  supersededBy?: string;
+  nextReviewAt?: string;
+  reviewIntervalDays?: number;
+  easinessFactor?: number;
+  reviewCount?: number;
   createdAt: string;
   updatedAt: string;
   expiresAt?: string;
@@ -155,12 +170,20 @@ export type AdapterScope =
 
 export type AdapterKind = "model" | "tool" | "plugin";
 
+export interface AdapterPrivacyProfile {
+  allowRawSecret: boolean;
+  allowRawConfidential: boolean;
+  requiresEgressScan: boolean;
+  defaultModelTarget: "external_model" | "local";
+}
+
 export interface AdapterManifest {
   id: string;
   name: string;
   version: string;
   kind: AdapterKind;
   scopes: AdapterScope[];
+  privacy: AdapterPrivacyProfile;
   sandbox: {
     network: boolean;
     filesystem: "none" | "read" | "write";

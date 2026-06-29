@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createMemory } from "@atlas/memory";
-import { attachCodex, benchmarkPreflightCommand, compileCommand, contextCommand, initCommand, preflightCommand, rememberCommand, taskDoneCommand, thinkingExperimentCommand } from "../src/index";
+import { attachCodex, benchmarkPreflightCommand, compileCommand, contextCommand, doctorSecurityCommand, initCommand, preflightCommand, rememberCommand, taskDoneCommand, thinkingExperimentCommand } from "../src/index";
+
+const githubTokenFixture = ["ghp", "abcdefghijklmnopqrstuvwxyz123456"].join("_");
 
 async function createFixtureProject(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "lmti-cli-"));
@@ -332,8 +334,9 @@ describe("LMTI CLI commands", () => {
 
     expect(result.observerFrame.effectiveContextRole).toBe("external_model");
     expect(result.selectedMemories.map((memory) => memory.metadata.title)).toContain("Dashboard Agent public route");
+    expect(result.selectedMemories.some((memory) => memory.metadata.title === "Internal dashboard permission note" && memory.mode === "summary")).toBe(true);
     expect(result.blockedMemories.map((memory) => memory.reason)).toEqual(
-      expect.arrayContaining(["secret", "deprecated_as_truth", "unauthorized_role"])
+      expect.arrayContaining(["secret", "deprecated_as_truth"])
     );
     expect(result.finalContextPackage.policyDecisionIds).toEqual(result.selectedMemories.map((memory) => memory.policyDecisionId));
     expect(result.egress.blocked).toBe(false);
@@ -380,6 +383,84 @@ describe("LMTI CLI commands", () => {
     );
     expect(result.adapterSandbox.deliveredContextPackageId).toBeUndefined();
     expect(result.predictedFailures.some((failure) => failure.includes("adapter sandbox blocked"))).toBe(true);
+  });
+
+  it("preflight applies adapter privacy profiles and denies raw sensitive adapter output", async () => {
+    const cwd = await createFixtureProject();
+    await compileCommand(cwd);
+    await writeFile(
+      path.join(cwd, "unsafe-adapter.json"),
+      JSON.stringify(
+        {
+          id: "unsafe-model",
+          name: "Unsafe Model",
+          version: "0.1.0",
+          kind: "model",
+          scopes: ["context:read"],
+          privacy: {
+            allowRawSecret: true,
+            allowRawConfidential: true,
+            requiresEgressScan: false,
+            defaultModelTarget: "external_model"
+          },
+          sandbox: {
+            network: false,
+            filesystem: "none",
+            allowMemoryStore: false,
+            timeoutMs: 1000
+          }
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    const result = await preflightCommand(cwd, "fix packing label bug", {
+      flags: { "adapter-manifest": "unsafe-adapter.json" },
+      now: new Date("2026-06-28T00:00:00.000Z")
+    });
+
+    expect(result.adapterSandbox.allowed).toBe(false);
+    expect(result.adapterSandbox.manifest.privacy).toMatchObject({
+      allowRawSecret: true,
+      allowRawConfidential: true,
+      requiresEgressScan: false,
+      defaultModelTarget: "external_model"
+    });
+    expect(result.adapterSandbox.deniedReasons).toEqual(
+      expect.arrayContaining(["egress_scan_required", "raw_secret_adapter_output_forbidden", "raw_confidential_adapter_output_forbidden"])
+    );
+  });
+
+  it("known adapters default to external policy-safe output", async () => {
+    const cwd = await createFixtureProject();
+    await compileCommand(cwd);
+    const result = await preflightCommand(cwd, "fix packing label bug", {
+      flags: { adapter: "codex" },
+      now: new Date("2026-06-28T00:00:00.000Z")
+    });
+
+    expect(result.request.modelTarget).toBe("external_model");
+    expect(result.adapterSandbox.manifest.privacy).toMatchObject({
+      allowRawSecret: false,
+      allowRawConfidential: false,
+      requiresEgressScan: true,
+      defaultModelTarget: "external_model"
+    });
+  });
+
+  it("security doctor reports config secret findings without raw leakage", async () => {
+    const cwd = await createFixtureProject();
+    await initCommand(cwd);
+    await writeFile(path.join(cwd, ".lmti", "config.json"), JSON.stringify({ token: githubTokenFixture, privacy: { allowSecretExport: true, allowExternalModelRawMemory: true } }, null, 2), "utf8");
+
+    const report = await doctorSecurityCommand(cwd);
+
+    expect(report.status).toBe("fail");
+    expect(report.checks.some((check) => check.id === "config-secret-scan" && check.status === "fail")).toBe(true);
+    expect(report.checks.some((check) => check.id === "privacy-config" && check.status === "fail")).toBe(true);
+    expect(JSON.stringify(report)).not.toContain(githubTokenFixture);
   });
 
   it("benchmarks preflight latency using the real preflight path", async () => {

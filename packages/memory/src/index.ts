@@ -30,9 +30,17 @@ import {
   redactText
 } from "@atlas/privacy";
 import type { MemoryAddInput, MemorySearchQuery, MemoryStore } from "./types";
+import { summarizeAssociations, reinforceAssociationSet } from "./associations";
+import { createConsolidationCandidate, detectSupersession, findSimilarLongTermMemory } from "./consolidate";
+import { decayLongTermMemoryRecord } from "./decay";
+import { encodeMemory } from "./encode";
+import { DEFAULT_CONTEXT_ACTIVATION_THRESHOLD, explainPrivacyDecision, scoreMemoryForRetrieval } from "./retrieval";
+import { reinforceMemoryRecord } from "./reinforce";
+import { reviewMemoryRecords, type MemoryReviewReport } from "./review";
 
 export type { MemoryAddInput, MemorySearchQuery, MemoryStore } from "./types";
 export type { MemoryRecord, MemorySearchResult };
+export { encodeMemory } from "./encode";
 
 export const LMTI_DIR = ".lmti";
 export const ATLAS_DIR = LMTI_DIR;
@@ -95,6 +103,52 @@ export interface MemoryPrivacyFinding {
 export interface ContextMemorySearchResult {
   results: MemorySearchResult[];
   filteredOut: number;
+}
+
+export interface MemoryDecayReport {
+  removedShortTerm: number;
+  updatedLongTerm: number;
+  weakenedLongTerm: number;
+  archivedLongTerm: number;
+}
+
+export interface MemoryConsolidationResult {
+  created: Array<{ id: string; title: string; sourceId: string }>;
+  reinforced: Array<{ id: string; title: string; sourceId: string }>;
+  skipped: Array<{ id: string; title: string; reason: string }>;
+}
+
+export interface MemoryReinforcementResult {
+  memory: MemoryRecord;
+  success: boolean;
+}
+
+export interface MemoryExplainEntry {
+  id: string;
+  title: string;
+  kind: MemoryKind;
+  sensitivity: MemorySensitivity;
+  promptPolicy: PromptPolicy;
+  status: MemoryRecord["status"];
+  score: number;
+  activation: number;
+  lexicalScore: number;
+  intentScore: number;
+  contextCueMatch: number;
+  associationScore: number;
+  priorityScore: number;
+  negativeKeywordPenalty: number;
+  privacyPenalty: number;
+  privacyDecision: string;
+  why: string[];
+  filteredOutReason?: string;
+}
+
+export interface MemoryExplainResult {
+  query: string;
+  taskIntent: InferredIntent;
+  selected: MemoryExplainEntry[];
+  filteredOut: MemoryExplainEntry[];
 }
 
 export interface TaskDoneInput {
@@ -279,29 +333,69 @@ export async function createMemory(record: NewMemoryRecord, options: MemoryRunti
   await decayMemory(options);
 
   const now = (options.now ?? new Date()).toISOString();
+  const encoded = encodeMemory(
+    {
+      kind: record.kind,
+      title: record.title,
+      content: record.content,
+      tags: record.tags,
+      sourceRefs: record.sourceRefs,
+      importance: record.importance,
+      confidence: record.confidence,
+      sensitivity: record.sensitivity,
+      promptPolicy: record.promptPolicy
+    },
+    {
+      taskIntent: record.inferredIntent,
+      taskDoneLesson: record.kind === "lesson"
+    }
+  );
   const memory: MemoryRecord = {
     id: record.id ?? randomUUID(),
     scope: record.scope,
     kind: record.kind,
-    title: record.title.trim(),
-    content: record.content.trim(),
+    title: encoded.title,
+    content: encoded.content,
     projectId: record.projectId.trim(),
     sourceRefs: record.sourceRefs ?? [],
-    tags: record.tags ?? [],
+    tags: Array.from(new Set([...(record.tags ?? []), ...encoded.tags])),
     importance: clampImportance(record.importance),
     confidence: record.confidence,
-    sensitivity: record.sensitivity,
-    promptPolicy: normalizePromptPolicy(record.promptPolicy, record.sensitivity),
+    sensitivity: encoded.sensitivity,
+    promptPolicy: normalizePromptPolicy(record.promptPolicy ?? encoded.promptPolicy, encoded.sensitivity),
     createdAt: record.createdAt ?? now,
     updatedAt: record.updatedAt ?? now,
     expiresAt:
       record.scope === "short_term"
         ? record.expiresAt ?? new Date((options.now ?? new Date()).getTime() + (options.shortTermTtlMs ?? DEFAULT_SHORT_TERM_TTL_MS)).toISOString()
         : record.expiresAt,
+    memoryStrength: record.memoryStrength ?? encoded.memoryStrength,
+    baseActivation: record.baseActivation ?? encoded.baseActivation,
+    retrievalCount: record.retrievalCount ?? 0,
+    lastRetrievedAt: record.lastRetrievedAt,
+    lastReinforcedAt: record.lastReinforcedAt,
+    decayRate: record.decayRate ?? encoded.decayRate,
+    stability: record.stability ?? encoded.stability,
+    priorityScore: record.priorityScore ?? encoded.priorityScore,
+    emotionalWeight: record.emotionalWeight,
+    contextCues: record.contextCues ?? encoded.contextCues,
+    associations: record.associations ?? [],
+    supersededBy: record.supersededBy,
+    status: record.status ?? "active",
+    nextReviewAt: record.nextReviewAt ?? new Date((options.now ?? new Date()).getTime() + Math.max(1, Math.ceil(encoded.memoryStrength / 6)) * 86_400_000).toISOString(),
+    reviewIntervalDays: record.reviewIntervalDays ?? Math.max(1, Math.ceil(encoded.memoryStrength / 6)),
+    easinessFactor: record.easinessFactor ?? 2.3,
+    reviewCount: record.reviewCount ?? 0,
+    negativeCues: record.negativeCues ?? [],
+    inferredIntent: record.inferredIntent ?? encoded.inferredIntent,
+    privacySafeSummary: record.privacySafeSummary ?? encoded.privacySafeSummary,
     version: record.version ?? 1
   };
 
   validateMemory(memory);
+  if (memory.scope === "long_term") {
+    await markSupersededMemory(memory, cwd);
+  }
   const records = memory.kind === "lesson" ? await readLessonMemory(cwd) : await readMemoryScope(memory.scope, cwd);
   records.push(memory);
   if (memory.kind === "lesson") {
@@ -412,6 +506,7 @@ export async function searchMemory(
 export async function retrieveMemoryMetadata(options: RetrieveMemoryMetadataOptions = {}): Promise<MemoryMetadata[]> {
   const cwd = options.cwd ?? process.cwd();
   await initAtlasStorage(cwd);
+  await decayMemory(options);
   const records = options.scope
     ? options.scope === "long_term"
       ? [...(await readMemoryScope(options.scope, cwd)), ...(await readLessonMemory(cwd))]
@@ -492,16 +587,21 @@ export async function searchMemoryForContext(
     .filter((record) => !options.kind || record.kind === options.kind)
     .map((record) => ({
       record,
-      ...scoreContextMemory(record, taskIntent, options.now ?? new Date())
+      ...scoreMemoryForRetrieval(record, {
+        query,
+        taskIntent,
+        now: options.now ?? new Date()
+      })
     }))
-    .sort((left, right) => right.score - left.score || right.record.importance - left.record.importance);
+    .sort((left, right) => right.score - left.score || right.activation - left.activation || right.record.importance - left.record.importance);
 
   const results: MemorySearchResult[] = [];
   let filteredOut = 0;
   const minScore = options.includeLowScore ? 1 : CONTEXT_MEMORY_SCORE_THRESHOLD;
+  const minActivation = options.includeLowScore ? 0.2 : DEFAULT_CONTEXT_ACTIVATION_THRESHOLD;
 
   for (const candidate of scored) {
-    if (candidate.score < minScore) {
+    if (candidate.filteredOutReason || candidate.score < minScore || candidate.activation < minActivation) {
       filteredOut += 1;
       continue;
     }
@@ -523,14 +623,32 @@ export async function searchMemoryForContext(
       mode: sanitized.mode,
       promptPolicy: sanitized.record.promptPolicy,
       why: [...candidate.why, sanitized.reason],
-      intentMatch: candidate.intentMatch,
-      keywordMatch: candidate.keywordMatch,
-      negativeKeywordPenalty: candidate.negativeKeywordPenalty
+      intentMatch: candidate.intentScore,
+      keywordMatch: candidate.lexicalScore,
+      lexicalScore: candidate.lexicalScore,
+      activation: candidate.activation,
+      baseActivation: candidate.baseActivation,
+      associationScore: candidate.associationScore,
+      priorityScore: candidate.priorityScore,
+      contextCueMatch: candidate.contextCueMatch,
+      negativeKeywordPenalty: candidate.negativeKeywordPenalty,
+      privacyPenalty: candidate.privacyPenalty
     });
 
     if (results.length >= (options.limit ?? 16)) {
       break;
     }
+  }
+
+  if (results.length > 0) {
+    await reinforceRetrievedMemories(
+      results.map((result) => result.record.id),
+      {
+        cwd,
+        now: options.now ?? new Date(),
+        reason: `co-retrieved for ${taskIntent.primaryIntent} context`
+      }
+    );
   }
 
   return { results, filteredOut };
@@ -553,6 +671,7 @@ export async function sanitizeMemoryForContext(
 
   if (normalized.sensitivity === "secret") {
     if (privacyContext.role === "owner" && options.includeSecretMeta) {
+      const safeSummary = "secret memory metadata only; raw content withheld.";
       await appendContextPrivacyAudit(cwd, normalized, privacyContext, "metadata_only", "secret memory exposed as metadata only", taskIntent, options.score);
       return {
         mode: "metadata_only",
@@ -560,6 +679,7 @@ export async function sanitizeMemoryForContext(
         record: {
           ...normalized,
           content: "",
+          privacySafeSummary: safeSummary,
           promptPolicy
         }
       };
@@ -569,13 +689,15 @@ export async function sanitizeMemoryForContext(
   }
 
   if (normalized.sensitivity === "confidential") {
+    const safeSummary = createSafeSummary(normalized);
     await appendContextPrivacyAudit(cwd, normalized, privacyContext, "summary", "confidential memory summarized; raw blocked", taskIntent, options.score);
     return {
       mode: "summary",
       reason: "confidential memory summarized; raw blocked",
       record: {
         ...normalized,
-        content: createSafeSummary(normalized),
+        content: safeSummary,
+        privacySafeSummary: safeSummary,
         promptPolicy
       }
     };
@@ -594,24 +716,28 @@ export async function sanitizeMemoryForContext(
         }
       };
     }
+    const safeSummary = createTaskRelevantSummary(normalized, taskIntent);
     return {
       mode: "summary",
       reason: "internal memory summarized by default",
       record: {
         ...normalized,
-        content: createTaskRelevantSummary(normalized, taskIntent),
+        content: safeSummary,
+        privacySafeSummary: safeSummary,
         promptPolicy: "summarize_only"
       }
     };
   }
 
   if (promptPolicy === "summarize_only") {
+    const safeSummary = createTaskRelevantSummary(normalized, taskIntent);
     return {
       mode: "summary",
       reason: "public memory requested summarize_only",
       record: {
         ...normalized,
-        content: createTaskRelevantSummary(normalized, taskIntent),
+        content: safeSummary,
+        privacySafeSummary: safeSummary,
         promptPolicy
       }
     };
@@ -690,7 +816,198 @@ export async function recordTaskDone(input: TaskDoneInput, options: MemoryRuntim
   };
 }
 
-export async function decayMemory(options: MemoryRuntimeOptions = {}): Promise<number> {
+export async function consolidateMemory(options: MemoryRuntimeOptions = {}): Promise<MemoryConsolidationResult> {
+  const cwd = options.cwd ?? process.cwd();
+  await initAtlasStorage(cwd);
+  await decayMemory(options);
+  const now = options.now ?? new Date();
+  const shortTerm = await readMemoryScope("short_term", cwd);
+  const longTerm = [...(await readMemoryScope("long_term", cwd)), ...(await readLessonMemory(cwd))];
+  const result: MemoryConsolidationResult = { created: [], reinforced: [], skipped: [] };
+  const consolidatedSourceIds = new Set<string>();
+
+  for (const source of shortTerm) {
+    const encoded = encodeMemory(
+      {
+        kind: source.kind === "task" ? "lesson" : source.kind,
+        title: source.title,
+        content: source.privacySafeSummary ?? source.content,
+        tags: source.tags,
+        sourceRefs: source.sourceRefs,
+        importance: source.importance,
+        confidence: source.confidence,
+        sensitivity: source.sensitivity,
+        promptPolicy: source.promptPolicy
+      },
+      {
+        taskIntent: source.inferredIntent,
+        taskDoneLesson: source.kind === "task"
+      }
+    );
+    const candidate = createConsolidationCandidate(source, encoded);
+    if (!candidate.shouldConsolidate) {
+      result.skipped.push({ id: source.id, title: redactText(source.title), reason: candidate.reason });
+      continue;
+    }
+
+    const existing = findSimilarLongTermMemory(encoded, longTerm);
+    if (existing) {
+      const reinforced = await reinforceMemory(existing.id, { ...options, now, success: true, intensity: 1.4 });
+      result.reinforced.push({ id: reinforced.memory.id, title: redactText(reinforced.memory.title), sourceId: source.id });
+      consolidatedSourceIds.add(source.id);
+      continue;
+    }
+
+    const created = await createMemory(
+      {
+        scope: "long_term",
+        kind: source.kind === "task" ? "lesson" : source.kind,
+        title: encoded.title,
+        content: encoded.privacySafeSummary,
+        projectId: source.projectId,
+        sourceRefs: Array.from(new Set([...source.sourceRefs, source.id])),
+        tags: encoded.tags,
+        importance: Math.max(source.importance, encoded.priorityScore),
+        confidence: source.confidence,
+        sensitivity: encoded.sensitivity === "secret" ? "confidential" : encoded.sensitivity,
+        promptPolicy: encoded.sensitivity === "secret" ? "summarize_only" : encoded.promptPolicy,
+        memoryStrength: encoded.memoryStrength,
+        baseActivation: encoded.baseActivation,
+        decayRate: encoded.decayRate,
+        stability: encoded.stability,
+        priorityScore: encoded.priorityScore,
+        contextCues: encoded.contextCues,
+        inferredIntent: encoded.inferredIntent,
+        privacySafeSummary: encoded.privacySafeSummary
+      },
+      { ...options, now }
+    );
+    result.created.push({ id: created.id, title: redactText(created.title), sourceId: source.id });
+    consolidatedSourceIds.add(source.id);
+  }
+
+  if (consolidatedSourceIds.size > 0) {
+    await writeMemoryScope(
+      "short_term",
+      shortTerm.filter((record) => !consolidatedSourceIds.has(record.id)),
+      cwd
+    );
+    await appendMemoryEvent(cwd, {
+      event: "memory.consolidate",
+      created: result.created.length,
+      reinforced: result.reinforced.length,
+      skipped: result.skipped.length
+    });
+  }
+
+  return result;
+}
+
+export async function reinforceMemory(
+  id: string,
+  options: MemoryRuntimeOptions & { success: boolean; intensity?: number } = { success: true }
+): Promise<MemoryReinforcementResult> {
+  const cwd = options.cwd ?? process.cwd();
+  await initAtlasStorage(cwd);
+  const all = await readAllMemory(cwd);
+  const existing = all.find((record) => record.id === id);
+  if (!existing) {
+    throw new Error(`Memory not found: ${id}`);
+  }
+  const memory = reinforceMemoryRecord(existing, {
+    success: options.success,
+    now: options.now,
+    intensity: options.intensity
+  });
+  const next = all.map((record) => (record.id === id ? memory : record));
+  await writeAllMemory(next, cwd);
+  await appendMemoryEvent(cwd, { event: "memory.reinforce", id, success: options.success });
+  return { memory, success: options.success };
+}
+
+export async function getMemoryAssociations(id: string, options: MemoryRuntimeOptions = {}): Promise<ReturnType<typeof summarizeAssociations>> {
+  const memory = await getMemory(id, options);
+  if (!memory) {
+    throw new Error(`Memory not found: ${id}`);
+  }
+  return summarizeAssociations(memory).map((association) => ({
+    ...association,
+    reason: redactText(association.reason)
+  }));
+}
+
+export async function reviewMemory(options: MemoryRuntimeOptions = {}): Promise<MemoryReviewReport> {
+  const cwd = options.cwd ?? process.cwd();
+  await initAtlasStorage(cwd);
+  await decayMemory(options);
+  const report = reviewMemoryRecords(await readAllMemory(cwd), options.now ?? new Date());
+  return {
+    due: report.due.map((item) => ({ ...item, title: redactText(item.title) })),
+    weak: report.weak.map((item) => ({ ...item, title: redactText(item.title) })),
+    conflicts: report.conflicts.map((item) => ({ ...item, title: redactText(item.title) })),
+    archiveCandidates: report.archiveCandidates.map((item) => ({ ...item, title: redactText(item.title) }))
+  };
+}
+
+export async function explainMemory(
+  query: string,
+  options: MemorySearchOptions & MemoryRuntimeOptions & { taskIntent?: InferredIntent } = {}
+): Promise<MemoryExplainResult> {
+  const cwd = options.cwd ?? process.cwd();
+  await initAtlasStorage(cwd);
+  await decayMemory(options);
+  const taskIntent = options.taskIntent ?? createUnknownIntent(query);
+  const privacyContext = privacyContextForOptions(options, {
+    includeSecret: options.includeSecret ?? false,
+    includeRaw: options.includeRaw ?? false,
+    command: options.privacyContext?.command ?? "memory explain"
+  });
+  const records = options.scope ? (options.scope === "long_term" ? [...(await readMemoryScope(options.scope, cwd)), ...(await readLessonMemory(cwd))] : await readMemoryScope(options.scope, cwd)) : await readAllMemory(cwd);
+  const entries = records
+    .filter((record) => !options.kind || record.kind === options.kind)
+    .map((record) => {
+      const score = scoreMemoryForRetrieval(record, { query, taskIntent, now: options.now ?? new Date() });
+      const promptPolicy = normalizePromptPolicy(record.promptPolicy, record.sensitivity);
+      const privacyDecision = explainPrivacyDecision({
+        sensitivity: record.sensitivity,
+        promptPolicy,
+        role: privacyContext.role,
+        includeRaw: privacyContext.includeRaw,
+        includeSecret: privacyContext.includeSecret
+      });
+      const privacyBlocked = privacyDecision.startsWith("blocked");
+      const activationBlocked = score.activation < (options.includeLowScore ? 0.2 : DEFAULT_CONTEXT_ACTIVATION_THRESHOLD);
+      const scoreBlocked = score.score < (options.includeLowScore ? 1 : CONTEXT_MEMORY_SCORE_THRESHOLD);
+      const filteredOutReason = score.filteredOutReason ?? (privacyBlocked ? privacyDecision : activationBlocked ? "activation below threshold" : scoreBlocked ? "score below threshold" : undefined);
+      return {
+        id: record.id,
+        title: redactText(record.title),
+        kind: record.kind,
+        sensitivity: record.sensitivity,
+        promptPolicy,
+        status: record.status,
+        score: score.score,
+        activation: score.activation,
+        lexicalScore: score.lexicalScore,
+        intentScore: score.intentScore,
+        contextCueMatch: score.contextCueMatch,
+        associationScore: score.associationScore,
+        priorityScore: score.priorityScore,
+        negativeKeywordPenalty: score.negativeKeywordPenalty,
+        privacyPenalty: score.privacyPenalty,
+        privacyDecision,
+        why: score.why,
+        filteredOutReason
+      };
+    })
+    .sort((left, right) => right.score - left.score || right.activation - left.activation);
+
+  const selected = entries.filter((entry) => !entry.filteredOutReason).slice(0, options.limit ?? 16);
+  const filteredOut = entries.filter((entry) => entry.filteredOutReason).slice(0, options.limit ?? 16);
+  return { query, taskIntent, selected, filteredOut };
+}
+
+export async function decayMemoryLifecycle(options: MemoryRuntimeOptions = {}): Promise<MemoryDecayReport> {
   const cwd = options.cwd ?? process.cwd();
   await initMemoryFiles(cwd);
   const now = options.now ?? new Date();
@@ -699,9 +1016,42 @@ export async function decayMemory(options: MemoryRuntimeOptions = {}): Promise<n
   const removed = shortTerm.length - active.length;
   if (removed > 0) {
     await writeMemoryScope("short_term", active, cwd);
-    await appendMemoryEvent(cwd, { event: "memory.decay", removed });
   }
-  return removed;
+
+  const longTerm = [...(await readMemoryScope("long_term", cwd)), ...(await readLessonMemory(cwd))];
+  const decayed = longTerm.map((record) => decayLongTermMemoryRecord(record, now));
+  const updatedLongTerm = decayed.filter((result) => result.changed).map((result) => result.record);
+  let weakenedLongTerm = 0;
+  let archivedLongTerm = 0;
+
+  if (updatedLongTerm.length > 0) {
+    const byId = new Map(updatedLongTerm.map((record) => [record.id, record]));
+    const next = longTerm.map((record) => byId.get(record.id) ?? record);
+    weakenedLongTerm = updatedLongTerm.filter((record) => record.status === "weak").length;
+    archivedLongTerm = updatedLongTerm.filter((record) => record.status === "archived").length;
+    await writeAllMemory([...active, ...next], cwd);
+  }
+
+  if (removed > 0 || updatedLongTerm.length > 0) {
+    await appendMemoryEvent(cwd, {
+      event: "memory.decay",
+      removedShortTerm: removed,
+      updatedLongTerm: updatedLongTerm.length,
+      weakenedLongTerm,
+      archivedLongTerm
+    });
+  }
+
+  return {
+    removedShortTerm: removed,
+    updatedLongTerm: updatedLongTerm.length,
+    weakenedLongTerm,
+    archivedLongTerm
+  };
+}
+
+export async function decayMemory(options: MemoryRuntimeOptions = {}): Promise<number> {
+  return (await decayMemoryLifecycle(options)).removedShortTerm;
 }
 
 export async function checkMemoryPrivacy(options: MemoryRuntimeOptions = {}): Promise<MemoryPrivacyFinding[]> {
@@ -843,6 +1193,16 @@ function createRuntimeMemoryRecord(
 ): MemoryRecord {
   const now = new Date().toISOString();
   const sourceRefs = input.sourceRefs ?? (input.source ? [input.source] : []);
+  const encoded = encodeMemory({
+    kind: normalizeKind(input.kind),
+    title: input.title,
+    content: input.content,
+    tags: input.tags,
+    sourceRefs,
+    importance: input.importance,
+    confidence: input.confidence,
+    sensitivity: input.sensitivity
+  });
   const expiresAt =
     scope === "short_term"
       ? input.expiresAt ?? new Date(Date.now() + (options.ttlMs ?? DEFAULT_SHORT_TERM_TTL_MS)).toISOString()
@@ -852,17 +1212,33 @@ function createRuntimeMemoryRecord(
     id: input.id ?? randomUUID(),
     scope,
     kind: normalizeKind(input.kind),
-    title: input.title.trim(),
-    content: input.content.trim(),
+    title: encoded.title,
+    content: encoded.content,
     projectId: input.projectId ?? options.projectId ?? "runtime",
     sourceRefs,
-    tags: input.tags ?? [],
+    tags: Array.from(new Set([...(input.tags ?? []), ...encoded.tags])),
     importance: clampImportance(input.importance ?? 0.5),
     confidence: normalizeConfidence(input.confidence),
-    sensitivity: normalizeSensitivity(input.sensitivity),
+    sensitivity: encoded.sensitivity,
+    promptPolicy: encoded.promptPolicy,
     createdAt: input.createdAt ?? now,
     updatedAt: now,
     expiresAt,
+    memoryStrength: encoded.memoryStrength,
+    baseActivation: encoded.baseActivation,
+    retrievalCount: 0,
+    decayRate: encoded.decayRate,
+    stability: encoded.stability,
+    priorityScore: encoded.priorityScore,
+    contextCues: encoded.contextCues,
+    associations: [],
+    status: "active",
+    reviewIntervalDays: Math.max(1, Math.ceil(encoded.memoryStrength / 6)),
+    easinessFactor: 2.3,
+    reviewCount: 0,
+    negativeCues: [],
+    inferredIntent: encoded.inferredIntent,
+    privacySafeSummary: encoded.privacySafeSummary,
     version: 1
   };
 }
@@ -880,23 +1256,62 @@ function normalizeStoredMemory(record: MemoryRecord): MemoryRecord {
     privacy?: string[];
   };
   const sensitivity = normalizeSensitivity(raw.sensitivity ?? sensitivityFromLegacyPrivacy(raw.privacy));
+  const kind = normalizeMemoryKind(raw.kind ?? raw.type);
+  const title = typeof raw.title === "string" && raw.title.trim() ? raw.title : "Untitled memory";
+  const content = typeof raw.content === "string" ? raw.content : typeof raw.summary === "string" ? raw.summary : "";
+  const sourceRefs = Array.isArray(raw.sourceRefs) ? raw.sourceRefs : typeof raw.source === "string" ? [raw.source] : [];
+  const tags = Array.isArray(raw.tags) ? raw.tags : [];
+  const createdAt = raw.createdAt ?? raw.updatedAt ?? new Date(0).toISOString();
+  const updatedAt = raw.updatedAt ?? raw.createdAt ?? new Date(0).toISOString();
+  const encoded = encodeMemory({
+    kind,
+    title,
+    content,
+    tags,
+    sourceRefs,
+    importance: raw.importance,
+    confidence: normalizeLegacyConfidence(raw.confidence),
+    sensitivity,
+    promptPolicy: normalizeLegacyPromptPolicy(raw.promptPolicy)
+  });
+  const effectiveSensitivity = encoded.sensitivity;
   return {
     ...record,
     id: raw.id ?? randomUUID(),
     scope: raw.scope === "short_term" || raw.scope === "long_term" ? raw.scope : "long_term",
-    kind: normalizeMemoryKind(raw.kind ?? raw.type),
-    title: typeof raw.title === "string" && raw.title.trim() ? raw.title : "Untitled memory",
-    content: typeof raw.content === "string" ? raw.content : typeof raw.summary === "string" ? raw.summary : "",
+    kind,
+    title,
+    content,
     projectId: typeof raw.projectId === "string" ? raw.projectId : typeof raw.project === "string" ? raw.project : "default",
-    sourceRefs: Array.isArray(raw.sourceRefs) ? raw.sourceRefs : typeof raw.source === "string" ? [raw.source] : [],
-    tags: Array.isArray(raw.tags) ? raw.tags : [],
+    sourceRefs,
+    tags: tags.length > 0 ? tags : encoded.tags,
     importance: typeof raw.importance === "number" ? raw.importance : 0.5,
     confidence: normalizeLegacyConfidence(raw.confidence),
-    sensitivity,
-    promptPolicy: normalizePromptPolicy(normalizeLegacyPromptPolicy(raw.promptPolicy), sensitivity),
-    createdAt: raw.createdAt ?? raw.updatedAt ?? new Date(0).toISOString(),
-    updatedAt: raw.updatedAt ?? raw.createdAt ?? new Date(0).toISOString(),
+    sensitivity: effectiveSensitivity,
+    promptPolicy: normalizePromptPolicy(normalizeLegacyPromptPolicy(raw.promptPolicy), effectiveSensitivity),
+    createdAt,
+    updatedAt,
     expiresAt: raw.expiresAt,
+    memoryStrength: typeof raw.memoryStrength === "number" ? raw.memoryStrength : encoded.memoryStrength,
+    baseActivation: typeof raw.baseActivation === "number" ? raw.baseActivation : encoded.baseActivation,
+    retrievalCount: typeof raw.retrievalCount === "number" ? raw.retrievalCount : 0,
+    lastRetrievedAt: raw.lastRetrievedAt,
+    lastReinforcedAt: raw.lastReinforcedAt,
+    decayRate: typeof raw.decayRate === "number" ? raw.decayRate : encoded.decayRate,
+    stability: typeof raw.stability === "number" ? raw.stability : encoded.stability,
+    priorityScore: typeof raw.priorityScore === "number" ? raw.priorityScore : encoded.priorityScore,
+    emotionalWeight: raw.emotionalWeight,
+    contextCues: Array.isArray(raw.contextCues) ? raw.contextCues : encoded.contextCues,
+    associations: Array.isArray(raw.associations) ? raw.associations : [],
+    supersededBy: raw.supersededBy,
+    status: normalizeMemoryStatus(raw.status),
+    nextReviewAt: raw.nextReviewAt,
+    reviewIntervalDays: typeof raw.reviewIntervalDays === "number" ? raw.reviewIntervalDays : Math.max(1, Math.ceil(encoded.memoryStrength / 6)),
+    easinessFactor: typeof raw.easinessFactor === "number" ? raw.easinessFactor : 2.3,
+    reviewCount: typeof raw.reviewCount === "number" ? raw.reviewCount : 0,
+    negativeCues: Array.isArray(raw.negativeCues) ? raw.negativeCues : [],
+    inferredIntent: raw.inferredIntent ?? encoded.inferredIntent,
+    privacySafeSummary: raw.privacySafeSummary ?? encoded.privacySafeSummary,
     version: typeof raw.version === "number" ? raw.version : 1
   };
 }
@@ -925,6 +1340,13 @@ function normalizeMemoryKind(kind?: string): MemoryKind {
     return "deploy_note";
   }
   return "system_note";
+}
+
+function normalizeMemoryStatus(status?: string): MemoryRecord["status"] {
+  if (status === "active" || status === "weak" || status === "archived" || status === "superseded") {
+    return status;
+  }
+  return "active";
 }
 
 function normalizeLegacyConfidence(confidence?: string): MemoryConfidence {
@@ -972,6 +1394,20 @@ function toMemoryMetadata(record: MemoryRecord, now: Date): MemoryMetadata {
     sensitivity: normalized.sensitivity,
     promptPolicy: normalizePromptPolicy(normalized.promptPolicy, normalized.sensitivity),
     status: deriveMemoryStatus(normalized, now),
+    memoryStrength: normalized.memoryStrength,
+    baseActivation: normalized.baseActivation,
+    retrievalCount: normalized.retrievalCount,
+    lastRetrievedAt: normalized.lastRetrievedAt,
+    lastReinforcedAt: normalized.lastReinforcedAt,
+    decayRate: normalized.decayRate,
+    stability: normalized.stability,
+    priorityScore: normalized.priorityScore,
+    contextCues: normalized.contextCues?.map(redactText),
+    supersededBy: normalized.supersededBy,
+    nextReviewAt: normalized.nextReviewAt,
+    reviewIntervalDays: normalized.reviewIntervalDays,
+    easinessFactor: normalized.easinessFactor,
+    reviewCount: normalized.reviewCount,
     createdAt: normalized.createdAt,
     updatedAt: normalized.updatedAt,
     expiresAt: normalized.expiresAt,
@@ -984,6 +1420,10 @@ function deriveMemoryStatus(record: MemoryRecord, now: Date): MemoryMetadata["st
     return "expired";
   }
 
+  if (record.status === "archived" || record.status === "superseded" || record.status === "weak") {
+    return record.status;
+  }
+
   const markers = [record.title, ...record.tags].join(" ").toLowerCase();
   if (/\bdeprecated\b|\bobsolete\b|\bsuperseded\b/.test(markers)) {
     return "deprecated";
@@ -993,6 +1433,9 @@ function deriveMemoryStatus(record: MemoryRecord, now: Date): MemoryMetadata["st
   }
   if (/\brejected\b|\binvalid\b/.test(markers)) {
     return "rejected";
+  }
+  if (record.status === "active") {
+    return "active";
   }
   return "active";
 }
@@ -1060,6 +1503,51 @@ async function writeAllMemory(records: MemoryRecord[], cwd: string): Promise<voi
     cwd
   );
   await writeLessonMemory(records.filter((record) => record.kind === "lesson"), cwd);
+}
+
+async function markSupersededMemory(newMemory: MemoryRecord, cwd: string): Promise<void> {
+  const existing = await readAllMemory(cwd);
+  const superseded = detectSupersession(newMemory, existing);
+  if (!superseded) {
+    return;
+  }
+
+  const now = newMemory.updatedAt;
+  const next = existing.map((record) =>
+    record.id === superseded.id
+      ? {
+          ...record,
+          status: "superseded" as const,
+          supersededBy: newMemory.id,
+          updatedAt: now,
+          version: record.version + 1
+        }
+      : record
+  );
+  await writeAllMemory(next, cwd);
+  await appendMemoryEvent(cwd, { event: "memory.supersede", id: superseded.id, supersededBy: newMemory.id });
+}
+
+async function reinforceRetrievedMemories(ids: string[], options: { cwd: string; now: Date; reason: string }): Promise<void> {
+  const uniqueIds = Array.from(new Set(ids));
+  if (uniqueIds.length === 0) {
+    return;
+  }
+
+  const all = await readAllMemory(options.cwd);
+  const active = new Set(uniqueIds);
+  let next = all.map((record) =>
+    active.has(record.id)
+      ? reinforceMemoryRecord(record, {
+          success: true,
+          now: options.now,
+          intensity: 0.6
+        })
+      : record
+  );
+  next = reinforceAssociationSet(next, uniqueIds, options.reason, options.now.toISOString());
+  await writeAllMemory(next, options.cwd);
+  await appendMemoryEvent(options.cwd, { event: "memory.retrieve_reinforce", ids: uniqueIds });
 }
 
 async function readMemoryScope(scope: MemoryScope, cwd: string): Promise<MemoryRecord[]> {
@@ -1193,6 +1681,9 @@ function validateMemory(record: MemoryRecord): void {
   if (record.promptPolicy && !["allow_raw", "summarize_only", "do_not_prompt"].includes(record.promptPolicy)) {
     throw new Error(`Invalid prompt policy: ${record.promptPolicy}`);
   }
+  if (record.status && !["active", "weak", "archived", "superseded"].includes(record.status)) {
+    throw new Error(`Invalid memory status: ${record.status}`);
+  }
 }
 
 function isExpired(record: MemoryRecord, now: Date): boolean {
@@ -1208,6 +1699,9 @@ function clampImportance(value: number): number {
 
 function scoreMemory(record: MemoryRecord, keywords: string[]): number {
   if (keywords.length === 0) {
+    return 0;
+  }
+  if (record.status === "archived" || record.status === "superseded") {
     return 0;
   }
   const corpus = normalizeSearchText([record.title, record.content, record.kind, record.scope, record.projectId, ...record.tags, ...record.sourceRefs].join(" "));

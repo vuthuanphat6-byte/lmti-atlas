@@ -59,18 +59,33 @@ importers:
 
   packages/cli:
     dependencies:
+      '@atlas/cognition':
+        specifier: workspace:*
+        version: link:../cognition
       '@atlas/compiler':
         specifier: workspace:*
         version: link:../compiler
       '@atlas/kernel':
         specifier: workspace:*
         version: link:../kernel
-      '@atlas/migration':
-        specifier: workspace:*
-        version: link:../migration
       '@atlas/memory':
         specifier: workspace:*
         version: link:../memory
+      '@atlas/migration':
+        specifier: workspace:*
+        version: link:../migration
+      '@atlas/privacy':
+        specifier: workspace:*
+        version: link:../privacy
+      '@atlas/types':
+        specifier: workspace:*
+        version: link:../types
+      '@atlas/world-model':
+        specifier: workspace:*
+        version: link:../world-model
+
+  packages/cognition:
+    dependencies:
       '@atlas/privacy':
         specifier: workspace:*
         version: link:../privacy
@@ -83,6 +98,9 @@ importers:
       '@atlas/graph':
         specifier: workspace:*
         version: link:../graph
+      '@atlas/privacy':
+        specifier: workspace:*
+        version: link:../privacy
       '@atlas/types':
         specifier: workspace:*
         version: link:../types
@@ -152,12 +170,21 @@ importers:
       '@atlas/agents':
         specifier: workspace:*
         version: link:../agents
+      '@atlas/cognition':
+        specifier: workspace:*
+        version: link:../cognition
       '@atlas/context':
         specifier: workspace:*
         version: link:../context
+      '@atlas/kernel':
+        specifier: workspace:*
+        version: link:../kernel
       '@atlas/memory':
         specifier: workspace:*
         version: link:../memory
+      '@atlas/privacy':
+        specifier: workspace:*
+        version: link:../privacy
       '@atlas/security':
         specifier: workspace:*
         version: link:../security
@@ -180,6 +207,15 @@ importers:
         version: link:../security
 
   packages/types: {}
+
+  packages/world-model:
+    dependencies:
+      '@atlas/privacy':
+        specifier: workspace:*
+        version: link:../privacy
+      '@atlas/types':
+        specifier: workspace:*
+        version: link:../types
 
 packages:
 

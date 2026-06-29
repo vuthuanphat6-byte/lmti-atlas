@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { DEFAULT_AGENTS, type AgentDefinition, type AgentResponse } from "@atlas/agents";
+import { inferIntent } from "@atlas/kernel";
+import { memorySearchResultsToCognitiveItems, runCognitiveCycle } from "@atlas/cognition";
 import { DefaultContextLoader, type AppContext, type ProjectContext, type UserContext } from "@atlas/context";
 import { InMemoryStore, LongTermMemory, ShortTermMemory, type MemoryStore } from "@atlas/memory";
+import { redactText } from "@atlas/privacy";
 import { DEFAULT_SECURITY_POLICY, SecurityGuard, type SecurityPolicy } from "@atlas/security";
 import {
   auditLogTool,
@@ -13,51 +16,8 @@ import {
   type ToolInput,
   type ToolOutput
 } from "@atlas/tools";
-import type {
-  AmfDocument,
-  ContextMemory,
-  FileEntry,
-  MemorySearchResult,
-  ModuleEntry,
-  RiskEntry,
-  RuleEntry,
-  SummaryEntry
-} from "@atlas/types";
-
-export interface InspectionStats {
-  project: string;
-  files: number;
-  modules: number;
-  dependencies: number;
-  symbols: number;
-  rules: number;
-  risks: number;
-  lastCompiled: string;
-  amfVersion: string;
-}
-
-export interface ContextPack {
-  task: string;
-  generatedAt: string;
-  project: string;
-  source: {
-    amfVersion: string;
-    compiledAt: string;
-    checksum: string;
-  };
-  relatedModules: Array<Pick<ModuleEntry, "name" | "path" | "summary" | "dependencies"> & { score: number }>;
-  relatedFiles: Array<Pick<FileEntry, "path" | "module" | "kind" | "summary" | "privacy" | "riskFlags"> & { score: number }>;
-  knownRules: Array<RuleEntry & { score: number }>;
-  risks: Array<RiskEntry & { score: number }>;
-  relatedShortTermMemories: ContextMemory[];
-  relatedLongTermMemories: ContextMemory[];
-  recommendedSteps: string[];
-}
-
-export interface ContextPackOptions {
-  memories?: MemorySearchResult[];
-  includeSecret?: boolean;
-}
+export { buildContextPack, formatInspection, inspectAmf } from "@atlas/kernel";
+export type { ContextPack, ContextPackOptions, InspectionStats } from "@atlas/types";
 
 export interface RuntimeConfig {
   projectId?: string;
@@ -71,9 +31,11 @@ export interface RuntimeEvent {
   type:
     | "session.started"
     | "context.loaded"
+    | "intent.inferred"
     | "message.received"
     | "memory.attached"
     | "memory.created"
+    | "cognition.updated"
     | "security.attached"
     | "agent.registered"
     | "tool.registered"
@@ -142,10 +104,13 @@ export class CoreRuntime {
       session.activeAgentId = agentId;
     }
 
-    this.record(session, "message.received", { message });
+    const messagePreview = redactText(message).slice(0, 120);
+    const inferredIntent = inferIntent(message);
+    this.record(session, "message.received", { messagePreview, length: message.length });
+    this.record(session, "intent.inferred", { primaryIntent: inferredIntent.primaryIntent, confidence: inferredIntent.confidence });
     await this.shortTermMemory.add({
       kind: "task",
-      title: `User message: ${message.slice(0, 64)}`,
+      title: `User message: ${messagePreview.slice(0, 64)}`,
       content: message,
       source: "runtime.message",
       tags: ["session", session.activeAgentId],
@@ -155,9 +120,10 @@ export class CoreRuntime {
 
     const remembered = extractRememberedContent(message);
     if (remembered) {
+      const rememberedPreview = redactText(remembered).slice(0, 64);
       await this.longTermMemory.add({
         kind: "preference",
-        title: `Remembered: ${remembered.slice(0, 64)}`,
+        title: `Remembered: ${rememberedPreview}`,
         content: remembered,
         source: "runtime.remember",
         tags: ["remembered", session.activeAgentId],
@@ -171,6 +137,7 @@ export class CoreRuntime {
       message,
       currentGoal: message
     });
+    this.updateCognitiveState(session, message, context, inferredIntent);
     const agent = this.requireAgent(session.activeAgentId);
 
     const routedResponse = await this.tryRouteRuntimeIntent(session, agent, message, context, remembered);
@@ -303,6 +270,32 @@ export class CoreRuntime {
     return agent;
   }
 
+  private updateCognitiveState(
+    session: RuntimeSession,
+    message: string,
+    context: AppContext,
+    inferredIntent: ReturnType<typeof inferIntent>
+  ): void {
+    const cognition = runCognitiveCycle({
+      projectId: session.projectId,
+      task: message,
+      inferredIntent,
+      contextItems: memorySearchResultsToCognitiveItems(context.relatedMemory),
+      subscribers: [
+        { id: "context_builder", role: "local" },
+        { id: "runtime_session", role: "local" },
+        { id: "agent_response_planner", role: "local" },
+        { id: "privacy_audit", role: "local" }
+      ]
+    });
+    this.record(session, "cognition.updated", {
+      focusId: cognition.focus.focusId,
+      selectedFocus: redactText(cognition.focus.selectedFocus).slice(0, 160),
+      phi: cognition.state.integratedInformation.normalizedPhi,
+      predictionError: cognition.predictionError.error
+    });
+  }
+
   private async tryRouteRuntimeIntent(
     session: RuntimeSession,
     agent: AgentDefinition,
@@ -379,169 +372,6 @@ export function createDefaultRuntime(config: RuntimeConfig = {}): CoreRuntime {
   return runtime;
 }
 
-export function inspectAmf(amf: AmfDocument): InspectionStats {
-  return {
-    project: amf.project.name,
-    files: amf.files.length,
-    modules: amf.modules.length,
-    dependencies: amf.dependencies.length,
-    symbols: amf.symbols.length,
-    rules: amf.rules.length,
-    risks: amf.risks.length,
-    lastCompiled: amf.project.compiledAt,
-    amfVersion: amf.version
-  };
-}
-
-export function formatInspection(stats: InspectionStats): string {
-  return [
-    `Project: ${stats.project}`,
-    `Files: ${stats.files}`,
-    `Modules: ${stats.modules}`,
-    `Dependencies: ${stats.dependencies}`,
-    `Symbols: ${stats.symbols}`,
-    `Rules: ${stats.rules}`,
-    `Risks: ${stats.risks}`,
-    `AMF version: ${stats.amfVersion}`,
-    `Last compiled: ${stats.lastCompiled}`
-  ].join("\n");
-}
-
-export function buildContextPack(amf: AmfDocument, task: string, options: ContextPackOptions = {}): ContextPack {
-  const keywords = tokenize(task);
-  const scoredModules = amf.modules
-    .map((module) => ({ ...module, score: scoreText(keywords, [module.name, module.path, module.summary, ...module.dependencies]) }))
-    .filter((module) => module.score > 0)
-    .sort(sortByScore)
-    .slice(0, 8);
-
-  const scoredFiles = amf.files
-    .map((file) => ({ ...file, score: scoreText(keywords, [file.path, file.module, file.kind, file.summary, ...file.riskFlags]) }))
-    .filter((file) => file.score > 0)
-    .sort(sortByScore)
-    .slice(0, 12);
-
-  const scoredRules = amf.rules
-    .map((rule) => ({ ...rule, score: scoreText(keywords, [rule.text, rule.source]) }))
-    .filter((rule) => rule.score > 0)
-    .sort(sortByScore)
-    .slice(0, 8);
-
-  const scoredRisks = amf.risks
-    .map((risk) => ({ ...risk, score: scoreText(keywords, [risk.type, risk.message, risk.file ?? "", risk.recommendation]) }))
-    .filter((risk) => risk.score > 0 || scoredFiles.some((file) => file.path === risk.file))
-    .sort(sortByScore)
-    .slice(0, 8);
-  const relatedMemories = (options.memories ?? [])
-    .filter((result) => options.includeSecret || result.record.sensitivity !== "secret")
-    .map((result) => memoryToContext(result, Boolean(options.includeSecret)));
-  const relatedShortTermMemories = relatedMemories.filter((memory) => memory.scope === "short_term").slice(0, 8);
-  const relatedLongTermMemories = relatedMemories.filter((memory) => memory.scope === "long_term").slice(0, 8);
-
-  return {
-    task,
-    generatedAt: new Date().toISOString(),
-    project: amf.project.name,
-    source: {
-      amfVersion: amf.version,
-      compiledAt: amf.project.compiledAt,
-      checksum: amf.project.checksum
-    },
-    relatedModules: scoredModules.map(({ name, path, summary, dependencies, score }) => ({
-      name,
-      path,
-      summary,
-      dependencies,
-      score
-    })),
-    relatedFiles: scoredFiles.map(({ path, module, kind, summary, privacy, riskFlags, score }) => ({
-      path,
-      module,
-      kind,
-      summary,
-      privacy,
-      riskFlags,
-      score
-    })),
-    knownRules: scoredRules,
-    risks: scoredRisks,
-    relatedShortTermMemories,
-    relatedLongTermMemories,
-    recommendedSteps: recommendSteps(scoredModules, scoredFiles, scoredRisks, relatedShortTermMemories, relatedLongTermMemories)
-  };
-}
-
-function recommendSteps(
-  modules: Array<ModuleEntry & { score: number }>,
-  files: Array<FileEntry & { score: number }>,
-  risks: Array<RiskEntry & { score: number }>,
-  shortTermMemories: ContextMemory[],
-  longTermMemories: ContextMemory[]
-): string[] {
-  const steps = [
-    "Review the highest-scoring related modules before editing.",
-    "Inspect related files and confirm the compiled summary still matches source reality."
-  ];
-
-  if (risks.length > 0) {
-    steps.push("Check risk zones before making changes, especially protected or secret-related findings.");
-  }
-
-  if (files.some((file) => file.kind === "test")) {
-    steps.push("Run or update the related tests after the change.");
-  } else {
-    steps.push("Add or identify a focused verification path for this task.");
-  }
-
-  if (modules.some((module) => module.dependencies.length > 0)) {
-    steps.push("Check module dependencies for downstream impact.");
-  }
-
-  if (shortTermMemories.length > 0) {
-    steps.push("Use related short-term memory to preserve active task context.");
-  }
-
-  if (longTermMemories.length > 0) {
-    steps.push("Apply related long-term memory before changing behavior.");
-  }
-
-  return steps;
-}
-
-function memoryToContext(result: MemorySearchResult, includeSecret: boolean): ContextMemory {
-  const { record, score } = result;
-  const base = {
-    id: record.id,
-    scope: record.scope,
-    kind: record.kind,
-    title: record.title,
-    tags: record.tags,
-    importance: record.importance,
-    confidence: record.confidence,
-    sensitivity: record.sensitivity,
-    score
-  };
-
-  if (record.sensitivity === "confidential") {
-    return {
-      ...base,
-      summary: "Confidential memory matched. Content withheld; use title, tags and source refs only."
-    };
-  }
-
-  if (record.sensitivity === "secret" && !includeSecret) {
-    return {
-      ...base,
-      summary: "Secret memory withheld."
-    };
-  }
-
-  return {
-    ...base,
-    content: record.content
-  };
-}
-
 function extractRememberedContent(message: string): string | undefined {
   const normalized = normalizeSearchText(message);
   const markers = ["remember that", "remember", "nho rang", "hay nho rang"];
@@ -605,39 +435,6 @@ function formatToolData(data: unknown): string {
 
 function ensureSentence(value: string): string {
   return /[.!?]$/.test(value) ? value : `${value}.`;
-}
-
-function scoreText(keywords: string[], values: string[]): number {
-  if (keywords.length === 0) {
-    return 0;
-  }
-
-  const corpus = normalizeSearchText(values.join(" "));
-  let score = 0;
-
-  for (const keyword of keywords) {
-    if (corpus.includes(keyword)) {
-      score += keyword.length > 3 ? 2 : 1;
-    }
-  }
-
-  return score;
-}
-
-function tokenize(task: string): string[] {
-  const stopWords = new Set(["the", "and", "for", "with", "that", "this", "from", "into", "fix", "bug"]);
-  return Array.from(
-    new Set(
-      normalizeSearchText(task)
-        .split(/[^a-z0-9_]+/i)
-        .map((part) => part.trim())
-        .filter((part) => part.length >= 2 && !stopWords.has(part))
-    )
-  );
-}
-
-function sortByScore<T extends { score: number }>(left: T, right: T): number {
-  return right.score - left.score;
 }
 
 function normalizeSearchText(value: string): string {

@@ -1,8 +1,10 @@
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { compileProject } from "../src/index";
+
+const compilerSecretFixture = ["sk", "proj", "abcdefghijklmnopqrstuvwxyz123456"].join("-");
 
 async function createFixtureProject(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "atlas-compiler-"));
@@ -81,6 +83,7 @@ async function createFixtureProject(): Promise<string> {
   );
 
   await writeFile(path.join(root, "node_modules", "ignored", "index.ts"), "export const ignored = true;", "utf8");
+  await writeFile(path.join(root, ".env"), `OPENAI_API_KEY=${compilerSecretFixture}`, "utf8");
   await writeFile(path.join(root, "tsconfig.tsbuildinfo"), "generated build cache", "utf8");
 
   return root;
@@ -95,6 +98,7 @@ describe("Knowledge Compiler v0", () => {
     expect(amf.project.name).toBe("fixture-project");
     expect(amf.files.map((file) => file.path)).toContain("src/orders/packing.ts");
     expect(amf.files.some((file) => file.path.includes("node_modules"))).toBe(false);
+    expect(amf.files.some((file) => file.path === ".env")).toBe(false);
     expect(amf.files.some((file) => file.path.endsWith(".tsbuildinfo"))).toBe(false);
     expect(amf.modules.map((module) => module.name)).toContain("src/orders");
     expect(amf.dependencies.some((dependency) => dependency.specifier === "../labels/printer")).toBe(true);
@@ -103,6 +107,7 @@ describe("Knowledge Compiler v0", () => {
     expect(amf.architecture.length).toBeGreaterThan(0);
     expect(amf.unresolvedQuestions.length).toBeGreaterThan(0);
     expect(JSON.stringify(amf)).not.toContain("dummy-value-for-redaction-test");
+    expect(JSON.stringify(amf)).not.toContain(compilerSecretFixture);
   });
 
   it("marks secret-like findings as protected risks", async () => {
@@ -113,5 +118,21 @@ describe("Knowledge Compiler v0", () => {
     expect(secretRisk).toBeDefined();
     expect(secretRisk?.privacy).toBe("protected");
     expect(secretRisk?.evidence).toContain("redacted");
+  });
+
+  it("skips symlinks while compiling untrusted project input", async () => {
+    const root = await createFixtureProject();
+    const outside = await mkdtemp(path.join(os.tmpdir(), "atlas-compiler-outside-"));
+    await writeFile(path.join(outside, "secret.ts"), "export const token='outside-secret-value';", "utf8");
+
+    try {
+      await symlink(path.join(outside, "secret.ts"), path.join(root, "src", "orders", "linked-secret.ts"), "file");
+    } catch {
+      return;
+    }
+
+    const amf = await compileProject(root);
+    expect(amf.files.some((file) => file.path.endsWith("linked-secret.ts"))).toBe(false);
+    expect(JSON.stringify(amf)).not.toContain("outside-secret-value");
   });
 });

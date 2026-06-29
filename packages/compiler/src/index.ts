@@ -20,6 +20,7 @@ import {
   type UnresolvedQuestionEntry
 } from "@atlas/types";
 import { attachModuleDependencies } from "@atlas/graph";
+import { hasSecretLikeMaterial, redactText } from "@atlas/privacy";
 
 const COMPILER_VERSION = "0.1.0";
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
@@ -284,6 +285,10 @@ async function scanProject(root: string, maxFileBytes: number): Promise<Observed
       }
 
       const relativePath = normalizePath(path.relative(root, absolutePath));
+      const realEntryPath = await fs.realpath(absolutePath);
+      if (!isPathInside(root, realEntryPath) || isPathTraversal(relativePath)) {
+        continue;
+      }
       if (isIgnoredFile(entry.name, relativePath)) {
         continue;
       }
@@ -574,10 +579,6 @@ function extractDatabaseEntries(filePath: string, text: string): DatabaseEntry[]
 
 function extractRisks(filePath: string, text: string, riskStart: number): RiskEntry[] {
   const risks: RiskEntry[] = [];
-  const secretPatterns = [
-    /\b(api[_-]?key|secret|token|password|passwd|private[_-]?key)\b\s*[:=]\s*["']?[^"'\s]{8,}/i,
-    /-----BEGIN\s+(?:RSA\s+|EC\s+|OPENSSH\s+)?PRIVATE\s+KEY-----/i
-  ];
   const unsafePatterns = [
     { regex: /\beval\s*\(/, message: "Dynamic eval usage can lead to code execution risk." },
     { regex: /\bnew\s+Function\s*\(/, message: "Dynamic Function constructor can lead to code execution risk." },
@@ -586,21 +587,18 @@ function extractRisks(filePath: string, text: string, riskStart: number): RiskEn
 
   let offset = 0;
 
-  for (const regex of secretPatterns) {
-    if (regex.test(text)) {
-      risks.push({
-        id: `RISK-${String(riskStart + offset).padStart(4, "0")}`,
-        type: "secret",
-        severity: "high",
-        message: "Secret-like material detected and excluded from AMF content.",
-        file: filePath,
-        evidence: "secret-like pattern matched; value redacted",
-        recommendation: "Move secrets to environment variables or a secret manager and keep them out of source control.",
-        privacy: "protected"
-      });
-      offset += 1;
-      break;
-    }
+  if (hasSecretLikeMaterial(text)) {
+    risks.push({
+      id: `RISK-${String(riskStart + offset).padStart(4, "0")}`,
+      type: "secret",
+      severity: "high",
+      message: "Secret-like material detected and excluded from AMF content.",
+      file: filePath,
+      evidence: "secret-like pattern matched; value redacted",
+      recommendation: "Move secrets to environment variables or a secret manager and keep them out of source control.",
+      privacy: "protected"
+    });
+    offset += 1;
   }
 
   for (const unsafe of unsafePatterns) {
@@ -958,11 +956,19 @@ function sanitizeIdentifier(value: string): string {
 }
 
 function sanitizeEvidence(value: string): string {
-  return value
-    .replace(/(api[_-]?key|secret|token|password|passwd|private[_-]?key)(\s*[:=]\s*)["']?[^"'\s]+/gi, "$1$2[REDACTED]")
+  return redactText(value)
     .replace(/\s+/g, " ")
     .slice(0, 180)
     .trim();
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isPathTraversal(relativePath: string): boolean {
+  return relativePath === ".." || relativePath.startsWith("../") || path.isAbsolute(relativePath);
 }
 
 function dedupeDependencies(dependencies: DependencyEntry[]): DependencyEntry[] {

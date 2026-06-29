@@ -4,13 +4,19 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { readAuditEvents } from "@atlas/privacy";
 import {
+  consolidateMemory,
   createMemory,
   decayMemory,
+  decayMemoryLifecycle,
+  encodeMemory,
+  explainMemory,
+  getMemoryAssociations,
   InMemoryStore,
   listMemory,
   LongTermMemory,
   promoteMemory,
   recordTaskDone,
+  reinforceMemory,
   searchMemory,
   searchMemoryForContext,
   ShortTermMemory
@@ -297,5 +303,306 @@ describe("Memory Core MVP-2", () => {
     expect(task.lessonMemory?.kind).toBe("lesson");
     const taskLog = await readFile(path.join(cwd, ".lmti", "events", "tasks.jsonl"), "utf8");
     expect(taskLog).toContain("Partner route fix");
+  });
+
+  it("encodes high-priority operational memories with lifecycle defaults", () => {
+    const encoded = encodeMemory(
+      {
+        kind: "deploy_note",
+        title: "Production deploy permission rule",
+        content: "Production deploy requires least-privilege permission review and rollback note.",
+        tags: ["deploy", "permission"],
+        importance: 0.9,
+        confidence: "high",
+        sensitivity: "internal",
+        sourceRefs: ["docs/deploy.md:12"]
+      },
+      { manualRemember: true }
+    );
+
+    expect(encoded.priorityScore).toBeGreaterThan(0.7);
+    expect(encoded.memoryStrength).toBeGreaterThan(80);
+    expect(encoded.contextCues).toEqual(expect.arrayContaining(["deploy", "permission"]));
+    expect(encoded.promptPolicy).toBe("summarize_only");
+    expect(encoded.privacySafeSummary).toContain("Production deploy permission rule");
+  });
+
+  it("consolidates short-term lessons above threshold and skips secret raw content", async () => {
+    const cwd = await createWorkspace();
+    await createMemory(
+      {
+        scope: "short_term",
+        kind: "task",
+        title: "Partner route debugging lesson",
+        content: "Task done lesson: Partner user must route to /partner after permission checks.",
+        projectId: "NOIR ERP",
+        sourceRefs: ["task-123"],
+        tags: ["partner", "routing", "permission"],
+        importance: 0.95,
+        confidence: "high",
+        sensitivity: "internal"
+      },
+      { cwd }
+    );
+    await createMemory(
+      {
+        scope: "short_term",
+        kind: "risk",
+        title: "Fake secret fixture",
+        content: "token=FAKE_TEST_TOKEN_VALUE",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["secret"],
+        importance: 1,
+        confidence: "high",
+        sensitivity: "internal"
+      },
+      { cwd }
+    );
+
+    const result = await consolidateMemory({ cwd });
+
+    expect(result.created).toHaveLength(1);
+    expect(result.skipped.some((entry) => entry.reason.includes("secret"))).toBe(true);
+    expect((await listMemory("long_term", { cwd })).some((record) => record.title.includes("Partner route"))).toBe(true);
+    expect((await listMemory("short_term", { cwd, privacyContext: { role: "owner", projectId: "NOIR ERP", purpose: "test", includeSecret: true, includeRaw: true, command: "memory list", timestamp: "2026-06-29T00:00:00.000Z" } })).some((record) => record.title.includes("Fake secret"))).toBe(true);
+  });
+
+  it("decays old weak memory without over-decaying durable rules", async () => {
+    const cwd = await createWorkspace();
+    const old = new Date("2026-01-01T00:00:00.000Z");
+    const weak = await createMemory(
+      {
+        scope: "long_term",
+        kind: "system_note",
+        title: "Temporary UI note",
+        content: "A low confidence note that should fade.",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["ui"],
+        importance: 0.2,
+        confidence: "low",
+        sensitivity: "internal",
+        memoryStrength: 2,
+        baseActivation: 1,
+        decayRate: 0.3
+      },
+      { cwd, now: old }
+    );
+    const durable = await createMemory(
+      {
+        scope: "long_term",
+        kind: "permission",
+        title: "Partner permission invariant",
+        content: "Partner users must not gain admin dashboard access.",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["partner", "permission"],
+        importance: 1,
+        confidence: "high",
+        sensitivity: "internal",
+        memoryStrength: 2,
+        baseActivation: 1,
+        decayRate: 0.3
+      },
+      { cwd, now: old }
+    );
+
+    const report = await decayMemoryLifecycle({ cwd, now: new Date("2026-06-01T00:00:00.000Z") });
+    const records = await listMemory("long_term", { cwd, privacyContext: { role: "owner", projectId: "NOIR ERP", purpose: "test", includeSecret: false, includeRaw: true, command: "memory list", timestamp: "2026-06-01T00:00:00.000Z" } });
+    const weakAfter = records.find((record) => record.id === weak.id);
+    const durableAfter = records.find((record) => record.id === durable.id);
+
+    expect(report.updatedLongTerm).toBeGreaterThan(0);
+    expect(weakAfter?.status).toBe("archived");
+    expect(durableAfter?.status).toBe("active");
+    expect(durableAfter?.baseActivation).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it("reinforces success and failure differently", async () => {
+    const cwd = await createWorkspace();
+    const memory = await createMemory(
+      {
+        scope: "long_term",
+        kind: "lesson",
+        title: "Permission debugging lesson",
+        content: "Use least privilege when debugging partner permissions.",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["permission"],
+        importance: 0.8,
+        confidence: "medium",
+        sensitivity: "internal"
+      },
+      { cwd }
+    );
+
+    const success = await reinforceMemory(memory.id, { cwd, success: true, now: new Date("2026-06-28T00:00:00.000Z") });
+    const failed = await reinforceMemory(memory.id, { cwd, success: false, now: new Date("2026-06-29T00:00:00.000Z") });
+
+    expect(success.memory.retrievalCount).toBe((memory.retrievalCount ?? 0) + 1);
+    expect(success.memory.memoryStrength).toBeGreaterThan(memory.memoryStrength ?? 0);
+    expect(failed.memory.confidence).toBe("low");
+    expect(failed.memory.status).toBe("weak");
+  });
+
+  it("marks superseded memory as history and excludes it from context", async () => {
+    const cwd = await createWorkspace();
+    const old = await createMemory(
+      {
+        scope: "long_term",
+        kind: "route",
+        title: "Partner route rule",
+        content: "Partner user must route to /partner.",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["partner", "routing"],
+        importance: 0.9,
+        confidence: "high",
+        sensitivity: "internal"
+      },
+      { cwd }
+    );
+    const next = await createMemory(
+      {
+        scope: "long_term",
+        kind: "route",
+        title: "Partner route rule v2",
+        content: "Partner user now routes to /partner-v2 instead of /partner.",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["partner", "routing"],
+        importance: 1,
+        confidence: "high",
+        sensitivity: "internal"
+      },
+      { cwd }
+    );
+
+    const oldAfter = await listMemory("long_term", { cwd }).then((records) => records.find((record) => record.id === old.id));
+    const context = await searchMemoryForContext("partner route", { cwd, taskIntent: { primaryIntent: "routing", secondaryIntents: ["partner"], keywords: ["partner", "route"], negativeKeywords: [], confidence: 0.9 } });
+
+    expect(oldAfter?.status).toBe("superseded");
+    expect(oldAfter?.supersededBy).toBe(next.id);
+    expect(context.results.map((entry) => entry.record.id)).not.toContain(old.id);
+    expect(context.results.map((entry) => entry.record.id)).toContain(next.id);
+  });
+
+  it("strengthens associations when memories are co-retrieved", async () => {
+    const cwd = await createWorkspace();
+    const route = await createMemory(
+      {
+        scope: "long_term",
+        kind: "route",
+        title: "Partner route",
+        content: "Partner traffic routes through /partner.",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["partner", "routing", "permission"],
+        importance: 0.9,
+        confidence: "high",
+        sensitivity: "internal"
+      },
+      { cwd }
+    );
+    const permission = await createMemory(
+      {
+        scope: "long_term",
+        kind: "permission",
+        title: "Partner permission",
+        content: "Partner role has least-privilege dashboard access.",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["partner", "permission", "routing"],
+        importance: 0.9,
+        confidence: "high",
+        sensitivity: "internal"
+      },
+      { cwd }
+    );
+
+    await searchMemoryForContext("partner permission route", { cwd, taskIntent: permissionIntent, includeLowScore: true });
+    const associations = await getMemoryAssociations(route.id, { cwd });
+
+    expect(associations.some((association) => association.targetMemoryId === permission.id && association.weight > 0)).toBe(true);
+  });
+
+  it("explains selected and filtered memory without raw secret leakage", async () => {
+    const cwd = await createWorkspace();
+    await createMemory(
+      {
+        scope: "long_term",
+        kind: "permission",
+        title: "Partner permission rule",
+        content: "Partner user must route to /partner.",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["partner", "permission"],
+        importance: 0.9,
+        confidence: "high",
+        sensitivity: "internal"
+      },
+      { cwd }
+    );
+    await createMemory(
+      {
+        scope: "long_term",
+        kind: "risk",
+        title: "Secret fixture",
+        content: "token=FAKE_TEST_TOKEN_VALUE",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["partner", "permission"],
+        importance: 1,
+        confidence: "high",
+        sensitivity: "secret"
+      },
+      { cwd }
+    );
+
+    const explanation = await explainMemory("partner permission", { cwd, taskIntent: permissionIntent });
+
+    expect(explanation.selected[0]?.title).toBe("Partner permission rule");
+    expect(explanation.selected[0]?.activation).toBeGreaterThan(0);
+    expect(explanation.filteredOut.some((entry) => entry.privacyDecision.includes("secret"))).toBe(true);
+    expect(JSON.stringify(explanation)).not.toContain("FAKE_TEST_TOKEN_VALUE");
+  });
+
+  it("summarizes internal memory for external model role instead of sending raw content", async () => {
+    const cwd = await createWorkspace();
+    await createMemory(
+      {
+        scope: "long_term",
+        kind: "lesson",
+        title: "Internal route note",
+        content: "Internal implementation detail that external models must not receive raw.",
+        projectId: "NOIR ERP",
+        sourceRefs: [],
+        tags: ["routing"],
+        importance: 0.8,
+        confidence: "high",
+        sensitivity: "internal",
+        promptPolicy: "allow_raw"
+      },
+      { cwd }
+    );
+
+    const result = await searchMemoryForContext("route note", {
+      cwd,
+      taskIntent: { primaryIntent: "routing", secondaryIntents: [], keywords: ["route", "note"], negativeKeywords: [], confidence: 0.8 },
+      includeRaw: true,
+      privacyContext: {
+        role: "external_model",
+        projectId: "NOIR ERP",
+        purpose: "test",
+        includeSecret: false,
+        includeRaw: true,
+        command: "context",
+        timestamp: "2026-06-29T00:00:00.000Z"
+      }
+    });
+
+    expect(result.results[0]?.mode).toBe("summary");
+    expect(JSON.stringify(result.results)).not.toContain("Internal implementation detail");
   });
 });

@@ -6,8 +6,11 @@
   "types": "dist/index.d.ts",
   "dependencies": {
     "@atlas/agents": "workspace:*",
+    "@atlas/cognition": "workspace:*",
     "@atlas/context": "workspace:*",
+    "@atlas/kernel": "workspace:*",
     "@atlas/memory": "workspace:*",
+    "@atlas/privacy": "workspace:*",
     "@atlas/security": "workspace:*",
     "@atlas/tools": "workspace:*",
     "@atlas/types": "workspace:*"

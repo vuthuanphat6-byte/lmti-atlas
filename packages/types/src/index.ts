@@ -1,3 +1,9 @@
+import type {
+  ContextMemory as AtlasContextMemory,
+  InferredIntent as AtlasInferredIntent,
+  MemorySearchResult as AtlasMemorySearchResult
+} from "./memory";
+
 export const AMF_VERSION = "0.1.0";
 
 export type {
@@ -6,6 +12,7 @@ export type {
   IntentCategory,
   MemoryContextMode,
   MemoryConfidence,
+  MemoryAssociation,
   MemoryKind,
   MemoryPatch,
   MemoryRecord,
@@ -13,6 +20,7 @@ export type {
   MemorySearchOptions,
   MemorySearchResult,
   MemorySensitivity,
+  MemoryStatus,
   NewMemoryRecord,
   PromptPolicy
 } from "./memory";
@@ -33,6 +41,7 @@ export type {
 export type {
   AdapterKind,
   AdapterManifest,
+  AdapterPrivacyProfile,
   AdapterSandboxResult,
   AdapterScope,
   BlockedMemory,
@@ -206,6 +215,62 @@ export interface AmfDocument {
   architecture: ArchitectureEntry[];
   summaries: SummaryEntry[];
   unresolvedQuestions: UnresolvedQuestionEntry[];
+}
+
+export interface InspectionStats {
+  project: string;
+  files: number;
+  modules: number;
+  dependencies: number;
+  symbols: number;
+  api: number;
+  database: number;
+  rules: number;
+  risks: number;
+  architecture: number;
+  unresolvedQuestions: number;
+  lastCompiled: string;
+  amfVersion: string;
+}
+
+export interface ContextPack {
+  task: string;
+  generatedAt: string;
+  kernel: {
+    name: "Mind Kernel";
+    version: string;
+  };
+  project: string;
+  source: {
+    amfVersion: string;
+    compiledAt: string;
+    checksum: string;
+  };
+  inferredIntent: AtlasInferredIntent;
+  filteredOut: {
+    files: number;
+    memories: number;
+  };
+  relatedModules: Array<Pick<ModuleEntry, "name" | "path" | "summary" | "dependencies"> & { score: number; why: string[] }>;
+  relatedFiles: Array<Pick<FileEntry, "path" | "module" | "kind" | "summary" | "privacy" | "riskFlags"> & { score: number; why: string[] }>;
+  relatedApi: Array<ApiEntry & { score: number }>;
+  relatedDatabase: Array<DatabaseEntry & { score: number }>;
+  knownRules: Array<RuleEntry & { score: number }>;
+  risks: Array<RiskEntry & { score: number }>;
+  architecture: Array<ArchitectureEntry & { score: number }>;
+  history: HistoryEntry[];
+  unresolvedQuestions: UnresolvedQuestionEntry[];
+  relatedShortTermMemories: AtlasContextMemory[];
+  relatedLongTermMemories: AtlasContextMemory[];
+  recommendedSteps: string[];
+}
+
+export interface ContextPackOptions {
+  memories?: AtlasMemorySearchResult[];
+  includeSecret?: boolean;
+  includeLowScore?: boolean;
+  inferredIntent?: AtlasInferredIntent;
+  memoriesFilteredOut?: number;
 }
 
 export interface AtlasIndex {

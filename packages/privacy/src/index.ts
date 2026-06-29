@@ -90,7 +90,7 @@ export function createPrivacyContext(input: Partial<PrivacyContext> = {}): Priva
 
 export function inferSinkRole(modelTarget: string): AccessRole {
   const normalized = modelTarget.trim().toLowerCase();
-  if (normalized.startsWith("local:") || normalized.startsWith("codex:local")) {
+  if (normalized === "local" || normalized.startsWith("local:") || normalized.startsWith("codex:local")) {
     return "agent";
   }
   return "external_model";
@@ -138,6 +138,9 @@ export function evaluateAccess(record: PrivacyProtectedRecord, privacyContext: P
   }
 
   if (record.sensitivity === "internal") {
+    if (privacyContext.role === "external_model") {
+      return { decision: "summarize", policy, reason: "External models receive summarized internal cognition by default." };
+    }
     if (policy.allowedRoles.includes(privacyContext.role)) {
       return { decision: "allow", policy, reason: "Internal cognition allowed for trusted project role." };
     }
@@ -186,14 +189,11 @@ export function shouldSummarize(record: PrivacyProtectedRecord, privacyContext: 
 }
 
 export function redactSecrets(text: string): string {
-  return text
-    .replace(/-----BEGIN\s+(?:RSA\s+|EC\s+|OPENSSH\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+|EC\s+|OPENSSH\s+)?PRIVATE\s+KEY-----/gi, "[REDACTED_PRIVATE_KEY]")
-    .replace(/\bsk_(?:test|live)_[A-Za-z0-9_]+\b/g, "[REDACTED_STRIPE_KEY]")
-    .replace(/\bAKIA[0-9A-Z]{16}\b/g, "[REDACTED_AWS_KEY]")
-    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "[REDACTED_JWT]")
-    .replace(/\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s"']+/gi, "[REDACTED_DATABASE_URL]")
-    .replace(/\b(api[_-]?key|secret|token|password|passwd|private[_-]?key)\b\s*[:=]\s*["']?[^"'\s]+/gi, "$1=[REDACTED]")
-    .replace(/\b([A-Z][A-Z0-9_]{2,})\s*=\s*["']?[^"'\s]+/g, "$1=[REDACTED]");
+  let redacted = text;
+  for (const pattern of SECRET_REDACTION_PATTERNS) {
+    redacted = redacted.replace(pattern.regex, pattern.replacement);
+  }
+  return redacted;
 }
 
 export function redactPII(text: string): string {
@@ -204,6 +204,10 @@ export function redactPII(text: string): string {
 
 export function redactText(text: string): string {
   return redactPII(redactSecrets(text));
+}
+
+export function hasSecretLikeMaterial(text: string): boolean {
+  return SECRET_EGRESS_PATTERNS.some((pattern) => pattern.regex.test(text));
 }
 
 export function runEgressSecretScan(context: unknown): ContextEgressScan {
@@ -405,10 +409,36 @@ const ROLE_STRENGTH: Record<AccessRole, number> = {
 
 const SECRET_EGRESS_PATTERNS: Array<{ id: string; regex: RegExp }> = [
   { id: "private_key", regex: /-----BEGIN\s+(?:RSA\s+|EC\s+|OPENSSH\s+)?PRIVATE\s+KEY-----/i },
+  { id: "openai_api_key", regex: /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/ },
+  { id: "anthropic_api_key", regex: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/ },
+  { id: "github_token", regex: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/ },
+  { id: "stripe_key", regex: /\b(?:sk|pk)_(?:test|live)_[A-Za-z0-9_]{8,}\b/ },
   { id: "aws_access_key", regex: /\bAKIA[0-9A-Z]{16}\b/ },
+  { id: "aws_secret_key", regex: /\baws[_-]?secret[_-]?access[_-]?key\b\s*[:=]\s*["']?[^"'\s]{16,}/i },
   { id: "jwt", regex: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/ },
   { id: "database_url", regex: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s"']+/i },
-  { id: "secret_assignment", regex: /\b(api[_-]?key|secret|token|password|passwd|private[_-]?key)\b\s*[:=]\s*["']?[^"'\s]+/i }
+  { id: "oauth_secret", regex: /\b(?:client[_-]?secret|oauth[_-]?secret)\b\s*[:=]\s*["']?[^"'\s]{8,}/i },
+  { id: "cookie_or_session", regex: /\b(?:cookie|set-cookie|session(?:[_-]?id)?|session[_-]?secret)\b\s*[:=]\s*["']?[^"'\s;]{8,}/i },
+  { id: "secret_assignment", regex: /\b(api[_-]?key|secret|token|password|passwd|private[_-]?key)\b\s*[:=]\s*["']?[^"'\s]{8,}/i }
+];
+
+const SECRET_REDACTION_PATTERNS: Array<{ regex: RegExp; replacement: string }> = [
+  {
+    regex: /-----BEGIN\s+(?:RSA\s+|EC\s+|OPENSSH\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+|EC\s+|OPENSSH\s+)?PRIVATE\s+KEY-----/gi,
+    replacement: "[REDACTED_PRIVATE_KEY]"
+  },
+  { regex: /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED_OPENAI_API_KEY]" },
+  { regex: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED_ANTHROPIC_API_KEY]" },
+  { regex: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED_GITHUB_TOKEN]" },
+  { regex: /\b(?:sk|pk)_(?:test|live)_[A-Za-z0-9_]{8,}\b/g, replacement: "[REDACTED_STRIPE_KEY]" },
+  { regex: /\bAKIA[0-9A-Z]{16}\b/g, replacement: "[REDACTED_AWS_KEY]" },
+  { regex: /\baws[_-]?secret[_-]?access[_-]?key\b\s*[:=]\s*["']?[^"'\s]{16,}/gi, replacement: "aws_secret_access_key=[REDACTED]" },
+  { regex: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, replacement: "[REDACTED_JWT]" },
+  { regex: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s"']+/gi, replacement: "[REDACTED_DATABASE_URL]" },
+  { regex: /\b(?:client[_-]?secret|oauth[_-]?secret)\b\s*[:=]\s*["']?[^"'\s]{8,}/gi, replacement: "oauth_secret=[REDACTED]" },
+  { regex: /\b(?:cookie|set-cookie|session(?:[_-]?id)?|session[_-]?secret)\b\s*[:=]\s*["']?[^"'\s;]{8,}/gi, replacement: "session=[REDACTED]" },
+  { regex: /\b(api[_-]?key|secret|token|password|passwd|private[_-]?key)\b\s*[:=]\s*["']?[^"'\s]+/gi, replacement: "$1=[REDACTED]" },
+  { regex: /\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|COOKIE|SESSION)[A-Z0-9_]*)\s*=\s*["']?[^"'\s]+/g, replacement: "$1=[REDACTED]" }
 ];
 
 function stricterRole(left: AccessRole, right: AccessRole): AccessRole {
@@ -430,8 +460,11 @@ function getHardBlockReason(
   if (memory.projectId && memory.projectId !== observer.projectId) {
     return "wrong_project";
   }
-  if (memory.status === "deprecated") {
+  if (memory.status === "deprecated" || memory.status === "superseded") {
     return "deprecated_as_truth";
+  }
+  if (memory.status === "archived") {
+    return "archived";
   }
   if (memory.status === "pending" || memory.status === "rejected") {
     return "pending_review";

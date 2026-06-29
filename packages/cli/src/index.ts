@@ -3,11 +3,17 @@ import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { compileProject } from "@atlas/compiler";
+import { contextPackToCognitiveItems, runCognitiveCycle } from "@atlas/cognition";
+import { contextPackToBeliefs, contextPackToSensoryInputs, estimateComputeCost, runWorldModelCycle } from "@atlas/world-model";
 import {
   checkMemoryPrivacy,
+  consolidateMemory,
   createMemory,
   createDefaultLmtiConfig,
   deleteMemory,
+  decayMemoryLifecycle,
+  explainMemory,
+  getMemoryAssociations,
   initAtlasStorage,
   listMemory,
   EXPERIMENTS_DIR,
@@ -15,6 +21,8 @@ import {
   type LmtiConfig,
   promoteMemory,
   recordTaskDone,
+  reinforceMemory,
+  reviewMemory,
   readAmfDocument,
   fetchAllowedMemoryContent,
   retrieveMemoryMetadata,
@@ -48,6 +56,7 @@ import {
 import type {
   AccessRole,
   AdapterManifest,
+  AdapterPrivacyProfile,
   AdapterSandboxResult,
   AmfDocument,
   BlockedMemory,
@@ -75,6 +84,12 @@ const DEFAULT_PREFLIGHT_ADAPTER_MANIFEST: AdapterManifest = {
   version: "0.1.0",
   kind: "model",
   scopes: ["context:read"],
+  privacy: {
+    allowRawSecret: false,
+    allowRawConfidential: false,
+    requiresEgressScan: true,
+    defaultModelTarget: "external_model"
+  },
   sandbox: {
     network: false,
     filesystem: "none",
@@ -82,6 +97,15 @@ const DEFAULT_PREFLIGHT_ADAPTER_MANIFEST: AdapterManifest = {
     timeoutMs: 30_000
   }
 };
+
+const DEFAULT_ADAPTER_PRIVACY_PROFILE: AdapterPrivacyProfile = {
+  allowRawSecret: false,
+  allowRawConfidential: false,
+  requiresEgressScan: true,
+  defaultModelTarget: "external_model"
+};
+
+const KNOWN_ADAPTERS = new Set(["codex", "claude-code", "cursor", "aider", "continue", "mcp", "openai-agents", "langchain", "crewai", "autogen", "generic", "custom"]);
 
 export async function main(argv: string[]): Promise<void> {
   const [command, ...args] = argv;
@@ -116,6 +140,12 @@ export async function main(argv: string[]): Promise<void> {
       return;
     case "memory":
       await runMemory(args);
+      return;
+    case "cognition":
+      await runCognition(args);
+      return;
+    case "world":
+      await runWorld(args);
       return;
     case "remember":
       await runRemember(args);
@@ -273,12 +303,113 @@ export async function migrateCommand(cwd: string, options: { yes?: boolean } = {
 
 async function runDoctor(args: string[]): Promise<void> {
   const { flags } = parseArgs(args);
+  if (flags.security) {
+    printSafeJson(await doctorSecurityCommand(process.cwd()), "doctor security");
+    return;
+  }
   const report = await doctorCommand(process.cwd(), { fix: Boolean(flags.fix) });
   console.log(formatDoctorReport(report));
 }
 
 export async function doctorCommand(cwd: string, options: { fix?: boolean } = {}): Promise<DoctorReport> {
   return doctorLmti(cwd, options);
+}
+
+export interface SecurityDoctorCheck {
+  id: string;
+  status: "pass" | "warn" | "fail";
+  message: string;
+}
+
+export interface SecurityDoctorReport {
+  status: "pass" | "warn" | "fail";
+  checks: SecurityDoctorCheck[];
+  recommendations: string[];
+}
+
+export async function doctorSecurityCommand(cwd: string): Promise<SecurityDoctorReport> {
+  const checks: SecurityDoctorCheck[] = [];
+  const recommendations = new Set<string>();
+  const paths = canonicalStoragePaths(cwd);
+  const legacy = await detectLegacyAtlasStorage(cwd);
+
+  if (legacy.hasLegacy) {
+    checks.push({ id: "legacy-storage", status: "warn", message: "Legacy Atlas storage detected; keep .lmti as canonical and avoid duplicate active mind files." });
+    recommendations.add("Run `lmti doctor` or `lmti migrate --yes` before release if legacy storage is still active.");
+  } else {
+    checks.push({ id: "legacy-storage", status: "pass", message: "No legacy Atlas storage detected." });
+  }
+
+  const configText = await readTextIfExists(paths.configPath);
+  if (!configText) {
+    checks.push({ id: "config-present", status: "fail", message: ".lmti/config.json is missing." });
+    recommendations.add("Run `lmti init` to create canonical local config.");
+  } else {
+    checks.push({ id: "config-present", status: "pass", message: ".lmti/config.json exists." });
+    const configScan = runEgressSecretScan(configText);
+    checks.push({
+      id: "config-secret-scan",
+      status: configScan.blocked ? "fail" : "pass",
+      message: configScan.blocked ? `Config contains secret-like material: ${configScan.findings.join(", ")}.` : "Config contains no detected secret-like material."
+    });
+    if (configScan.blocked) {
+      recommendations.add("Remove secrets from .lmti/config.json; use secure storage before adding adapter credentials.");
+    }
+
+    try {
+      const config = JSON.parse(configText) as Partial<LmtiConfig>;
+      const privacy = config.privacy;
+      const permissive = Boolean(privacy?.allowSecretExport) || Boolean(privacy?.allowExternalModelRawMemory);
+      checks.push({
+        id: "privacy-config",
+        status: permissive ? "fail" : "pass",
+        message: permissive ? "Privacy config allows secret export or external raw memory." : "Privacy config keeps secret export and external raw memory disabled."
+      });
+      if (permissive) {
+        recommendations.add("Set privacy.allowSecretExport=false and privacy.allowExternalModelRawMemory=false.");
+      }
+    } catch {
+      checks.push({ id: "config-json", status: "fail", message: ".lmti/config.json is not valid JSON." });
+      recommendations.add("Repair .lmti/config.json before using adapters or context commands.");
+    }
+  }
+
+  try {
+    const audit = await verifyAuditIntegrity(cwd);
+    checks.push({
+      id: "audit-integrity",
+      status: audit.valid ? "pass" : "fail",
+      message: audit.valid ? `Audit hash chain valid (${audit.checked} events checked).` : `Audit integrity failed (${audit.failures.length} failure(s)).`
+    });
+    if (!audit.valid) {
+      recommendations.add("Inspect .lmti/privacy/audit.jsonl locally and investigate possible tampering.");
+    }
+  } catch {
+    checks.push({ id: "audit-integrity", status: "warn", message: "Audit integrity could not be verified yet." });
+    recommendations.add("Run `lmti privacy audit --verify` after privacy storage is initialized.");
+  }
+
+  try {
+    const memory = await checkMemoryPrivacy({ cwd });
+    checks.push({
+      id: "memory-privacy",
+      status: memory.length > 0 ? "warn" : "pass",
+      message: memory.length > 0 ? `${memory.length} memory privacy finding(s) require review.` : "Memory privacy check has no findings."
+    });
+    if (memory.length > 0) {
+      recommendations.add("Review `lmti privacy check` findings and mark secret-like memory as secret/do_not_prompt.");
+    }
+  } catch {
+    checks.push({ id: "memory-privacy", status: "warn", message: "Memory privacy check could not run." });
+  }
+
+  const failed = checks.some((check) => check.status === "fail");
+  const warned = checks.some((check) => check.status === "warn");
+  return {
+    status: failed ? "fail" : warned ? "warn" : "pass",
+    checks,
+    recommendations: Array.from(recommendations)
+  };
 }
 
 async function migrateLegacyIfLmtiMissing(cwd: string, warnings: string[] = []): Promise<MigrationResult | undefined> {
@@ -314,7 +445,7 @@ async function runContext(args: string[]): Promise<void> {
   const includeSecret = Boolean(flags["include-secret"]);
   const role = parseRole(stringFlag(flags, "role") ?? "developer");
   const contextPack = await contextCommand(process.cwd(), task, { amfPath, includeSecret, role, flags });
-  console.log(JSON.stringify(contextPack, null, 2));
+  printSafeJson(contextPack, "context");
 }
 
 export async function contextCommand(
@@ -328,19 +459,23 @@ export async function contextCommand(
   } = {}
 ) {
   const flags = options.flags ?? {};
-  const includeSecret = Boolean(options.includeSecret);
+  const adapterManifest = flags.adapter || flags["adapter-manifest"]
+    ? await loadAdapterManifest(cwd, stringFlag(flags, "adapter-manifest"), stringFlag(flags, "adapter"))
+    : undefined;
+  const adapterEffectiveRole = adapterManifest ? deriveEffectiveContextRole(options.role ?? "developer", adapterManifest.privacy.defaultModelTarget) : undefined;
+  const includeSecret = adapterManifest ? false : Boolean(options.includeSecret);
   const includeRaw = Boolean(flags["include-raw"]);
   const includeSecretMeta = Boolean(flags["include-secret-meta"]);
   const includeLowScore = Boolean(flags["include-low-score"]);
-  const role = options.role ?? "developer";
+  const role = adapterEffectiveRole ?? options.role ?? "developer";
   await migrateLegacyIfLmtiMissing(cwd);
   const amf = await readCompiledAmf(cwd, options.amfPath);
   const inferredIntent = inferIntent(task);
   const memorySelection = await searchMemoryForContext(task, {
     cwd,
     includeSecret,
-    includeRaw,
-    includeSecretMeta,
+    includeRaw: adapterManifest ? false : includeRaw,
+    includeSecretMeta: adapterManifest ? false : includeSecretMeta,
     includeLowScore,
     taskIntent: inferredIntent,
     privacyContext: createCliPrivacyContext(role, flags, "context", "context generation"),
@@ -364,9 +499,9 @@ async function runPreflight(args: string[]): Promise<void> {
   const task = positional[0];
   const amfPath = positional[1];
   const role = parseRole(stringFlag(flags, "role") ?? "developer");
-  const modelTarget = stringFlag(flags, "model-target") ?? "external_model";
+  const modelTarget = stringFlag(flags, "model-target");
   const result = await preflightCommand(process.cwd(), task, { amfPath, role, modelTarget, flags });
-  console.log(JSON.stringify(result, null, 2));
+  printSafeJson(result, "preflight");
 }
 
 export async function preflightCommand(
@@ -384,9 +519,10 @@ export async function preflightCommand(
   const latency = createLatencyTracker();
   const now = options.now ?? new Date();
   const observerRole = options.role ?? "developer";
-  const modelTarget = options.modelTarget ?? "external_model";
 
   await migrateLegacyIfLmtiMissing(cwd);
+  const adapterManifest = await loadAdapterManifest(cwd, stringFlag(flags, "adapter-manifest"), stringFlag(flags, "adapter"));
+  const modelTarget = options.modelTarget ?? adapterManifest.privacy.defaultModelTarget;
   const amf = await readCompiledAmf(cwd, options.amfPath);
   latency.mark("read_amf");
   const inferredIntent = inferIntent(task);
@@ -465,7 +601,6 @@ export async function preflightCommand(
   latency.mark("compile_context");
   const egress = runEgressSecretScan(finalContextPackage);
   latency.mark("egress_scan");
-  const adapterManifest = await loadAdapterManifest(cwd, stringFlag(flags, "adapter-manifest"));
   const adapterSandbox = runAdapterSandbox({
     manifest: adapterManifest,
     contextPackage: finalContextPackage,
@@ -552,14 +687,31 @@ function createLatencyTracker(): { mark: (phase: string) => void; phases: () => 
   };
 }
 
-async function loadAdapterManifest(cwd: string, manifestPath?: string): Promise<AdapterManifest> {
+async function loadAdapterManifest(cwd: string, manifestPath?: string, adapterId?: string): Promise<AdapterManifest> {
+  if (adapterId) {
+    return createKnownAdapterManifest(adapterId);
+  }
   if (!manifestPath) {
     return DEFAULT_PREFLIGHT_ADAPTER_MANIFEST;
   }
 
   const resolved = path.resolve(cwd, manifestPath);
+  assertPathInsideCwd(cwd, resolved, "adapter manifest");
   const parsed = JSON.parse(await fs.readFile(resolved, "utf8")) as Partial<AdapterManifest>;
   return normalizeAdapterManifest(parsed);
+}
+
+function createKnownAdapterManifest(adapterId: string): AdapterManifest {
+  const normalized = adapterId.trim().toLowerCase();
+  if (!KNOWN_ADAPTERS.has(normalized)) {
+    throw new Error(`Unknown adapter: ${adapterId}`);
+  }
+  return {
+    ...DEFAULT_PREFLIGHT_ADAPTER_MANIFEST,
+    id: normalized,
+    name: `${normalized} adapter`,
+    privacy: { ...DEFAULT_ADAPTER_PRIVACY_PROFILE }
+  };
 }
 
 function normalizeAdapterManifest(input: Partial<AdapterManifest>): AdapterManifest {
@@ -579,12 +731,23 @@ function normalizeAdapterManifest(input: Partial<AdapterManifest>): AdapterManif
     version: input.version,
     kind: input.kind,
     scopes: Array.from(new Set(input.scopes)),
+    privacy: normalizeAdapterPrivacyProfile(input.privacy),
     sandbox: {
       network: Boolean(input.sandbox.network),
       filesystem: input.sandbox.filesystem,
       allowMemoryStore: Boolean(input.sandbox.allowMemoryStore),
       timeoutMs: Number(input.sandbox.timeoutMs)
     }
+  };
+}
+
+function normalizeAdapterPrivacyProfile(input?: Partial<AdapterPrivacyProfile>): AdapterPrivacyProfile {
+  const defaultModelTarget = input?.defaultModelTarget === "local" ? "local" : "external_model";
+  return {
+    allowRawSecret: Boolean(input?.allowRawSecret),
+    allowRawConfidential: Boolean(input?.allowRawConfidential),
+    requiresEgressScan: input?.requiresEgressScan !== false,
+    defaultModelTarget
   };
 }
 
@@ -615,6 +778,15 @@ function validateAdapterManifestScope(manifest: AdapterManifest): string[] {
 
   if (!scopes.has("context:read")) {
     deniedReasons.push("missing_context_read_scope");
+  }
+  if (!manifest.privacy.requiresEgressScan) {
+    deniedReasons.push("egress_scan_required");
+  }
+  if (manifest.privacy.allowRawSecret) {
+    deniedReasons.push("raw_secret_adapter_output_forbidden");
+  }
+  if (manifest.privacy.allowRawConfidential) {
+    deniedReasons.push("raw_confidential_adapter_output_forbidden");
   }
 
   for (const forbidden of ["memory:read", "memory:write", "secret:read", "audit:read"] as const) {
@@ -704,6 +876,8 @@ function scorePolicySafeMemory(memory: PolicySafeMemoryResult, intent: InferredI
   }
 
   score += Math.round(memory.metadata.importance * 2);
+  score += Math.round((memory.metadata.priorityScore ?? 0) * 3);
+  score += Math.round((memory.metadata.baseActivation ?? 0) * 0.5);
   return { score: Math.max(0, score), why };
 }
 
@@ -725,9 +899,33 @@ function policySafeMemoryToSearchResult(memory: PolicySafeMemoryResult): MemoryS
       createdAt: memory.metadata.createdAt,
       updatedAt: memory.metadata.updatedAt,
       expiresAt: memory.metadata.expiresAt,
+      memoryStrength: memory.metadata.memoryStrength,
+      baseActivation: memory.metadata.baseActivation,
+      retrievalCount: memory.metadata.retrievalCount,
+      lastRetrievedAt: memory.metadata.lastRetrievedAt,
+      lastReinforcedAt: memory.metadata.lastReinforcedAt,
+      decayRate: memory.metadata.decayRate,
+      stability: memory.metadata.stability,
+      priorityScore: memory.metadata.priorityScore,
+      contextCues: memory.metadata.contextCues,
+      supersededBy: memory.metadata.supersededBy,
+      status:
+        memory.metadata.status === "active" ||
+        memory.metadata.status === "weak" ||
+        memory.metadata.status === "archived" ||
+        memory.metadata.status === "superseded"
+          ? memory.metadata.status
+          : "active",
+      nextReviewAt: memory.metadata.nextReviewAt,
+      reviewIntervalDays: memory.metadata.reviewIntervalDays,
+      easinessFactor: memory.metadata.easinessFactor,
+      reviewCount: memory.metadata.reviewCount,
       version: memory.metadata.version
     },
     score: memory.score,
+    activation: memory.metadata.baseActivation,
+    baseActivation: memory.metadata.baseActivation,
+    priorityScore: memory.metadata.priorityScore,
     mode: memory.mode,
     promptPolicy: memory.metadata.promptPolicy,
     why: memory.why
@@ -915,7 +1113,7 @@ async function runExperiment(args: string[]): Promise<void> {
 
   const task = rest.join(" ");
   const result = await thinkingExperimentCommand(process.cwd(), task);
-  console.log(JSON.stringify(result, null, 2));
+  printSafeJson(result, "experiment");
 }
 
 export interface ThinkingExperimentResult {
@@ -1075,6 +1273,24 @@ async function runMemory(args: string[]): Promise<void> {
     case "search":
       await runMemorySearch(rest);
       return;
+    case "consolidate":
+      await runMemoryConsolidate(rest);
+      return;
+    case "decay":
+      await runMemoryDecay(rest);
+      return;
+    case "reinforce":
+      await runMemoryReinforce(rest);
+      return;
+    case "review":
+      await runMemoryReview(rest);
+      return;
+    case "associations":
+      await runMemoryAssociations(rest);
+      return;
+    case "explain":
+      await runMemoryExplain(rest);
+      return;
     case "promote":
       await runMemoryPromote(rest);
       return;
@@ -1082,7 +1298,7 @@ async function runMemory(args: string[]): Promise<void> {
       await runMemoryDelete(rest);
       return;
     default:
-      throw new Error("Usage: lmti memory <add|list|search|promote|delete>");
+      throw new Error("Usage: lmti memory <add|list|search|consolidate|decay|reinforce|review|associations|explain|promote|delete>");
   }
 }
 
@@ -1111,7 +1327,7 @@ async function runMemoryAdd(args: string[]): Promise<void> {
 
   const memory = await createMemory(record, { cwd: process.cwd() });
   warnIfSensitive(memory);
-  console.log(JSON.stringify(safeMemoryForCli(memory), null, 2));
+  printSafeJson(safeMemoryForCli(memory), "memory add");
 }
 
 async function runMemoryList(args: string[]): Promise<void> {
@@ -1125,7 +1341,7 @@ async function runMemoryList(args: string[]): Promise<void> {
   if (role !== "developer" || flags["include-secret"]) {
     console.warn(`[LMTI] Sensitive memory access requested as role=${role}. Policy enforcement applied.`);
   }
-  console.log(JSON.stringify(memories, null, 2));
+  printSafeJson(memories, "memory list");
 }
 
 async function runMemorySearch(args: string[]): Promise<void> {
@@ -1146,7 +1362,84 @@ async function runMemorySearch(args: string[]): Promise<void> {
   if (flags["include-secret"] || stringFlag(flags, "role")) {
     console.warn("[LMTI] Sensitive memory search requested. Policy enforcement applied.");
   }
-  console.log(JSON.stringify(results, null, 2));
+  printSafeJson(results, "memory search");
+}
+
+async function runMemoryConsolidate(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const result = await consolidateMemory({
+    cwd: process.cwd(),
+    privacyContext: createCliPrivacyContext(parseRole(stringFlag(flags, "role") ?? "developer"), flags, "memory consolidate", "consolidate memory")
+  });
+  printSafeJson(result, "memory consolidate");
+}
+
+async function runMemoryDecay(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const result = await decayMemoryLifecycle({
+    cwd: process.cwd(),
+    privacyContext: createCliPrivacyContext(parseRole(stringFlag(flags, "role") ?? "developer"), flags, "memory decay", "decay memory")
+  });
+  printSafeJson(result, "memory decay");
+}
+
+async function runMemoryReinforce(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const id = positional[0];
+  if (!id) {
+    throw new Error("Usage: lmti memory reinforce <id> --success true|false");
+  }
+  const success = parseBooleanFlag(flags, "success");
+  const result = await reinforceMemory(id, {
+    cwd: process.cwd(),
+    success,
+    intensity: parseNumberFlag(flags, "intensity", success ? 1 : 1.2),
+    privacyContext: createCliPrivacyContext(parseRole(stringFlag(flags, "role") ?? "developer"), flags, "memory reinforce", "reinforce memory")
+  });
+  printSafeJson({ success: result.success, memory: safeMemoryForCli(result.memory) }, "memory reinforce");
+}
+
+async function runMemoryReview(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const result = await reviewMemory({
+    cwd: process.cwd(),
+    privacyContext: createCliPrivacyContext(parseRole(stringFlag(flags, "role") ?? "developer"), flags, "memory review", "review memory")
+  });
+  printSafeJson(result, "memory review");
+}
+
+async function runMemoryAssociations(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const id = positional[0];
+  if (!id) {
+    throw new Error("Usage: lmti memory associations <id>");
+  }
+  const result = await getMemoryAssociations(id, {
+    cwd: process.cwd(),
+    privacyContext: createCliPrivacyContext(parseRole(stringFlag(flags, "role") ?? "developer"), flags, "memory associations", "inspect memory associations")
+  });
+  printSafeJson(result, "memory associations");
+}
+
+async function runMemoryExplain(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const query = positional[0];
+  if (!query) {
+    throw new Error('Usage: lmti memory explain "<query>" [--role developer]');
+  }
+  const taskIntent = inferIntent(query);
+  const result = await explainMemory(query, {
+    cwd: process.cwd(),
+    scope: optionalScope(stringFlag(flags, "scope")),
+    kind: optionalKind(stringFlag(flags, "kind")),
+    includeSecret: Boolean(flags["include-secret"]),
+    includeRaw: Boolean(flags["include-raw"]),
+    includeLowScore: Boolean(flags["include-low-score"]),
+    limit: parseNumberFlag(flags, "limit", 16),
+    taskIntent,
+    privacyContext: createCliPrivacyContext(parseRole(stringFlag(flags, "role") ?? "developer"), flags, "memory explain", "explain memory retrieval")
+  });
+  printSafeJson(result, "memory explain");
 }
 
 async function runMemoryPromote(args: string[]): Promise<void> {
@@ -1154,7 +1447,7 @@ async function runMemoryPromote(args: string[]): Promise<void> {
   if (!id) {
     throw new Error("Usage: lmti memory promote <id>");
   }
-  console.log(JSON.stringify(await promoteMemory(id, { cwd: process.cwd() }), null, 2));
+  printSafeJson(await promoteMemory(id, { cwd: process.cwd() }), "memory promote");
 }
 
 async function runMemoryDelete(args: string[]): Promise<void> {
@@ -1163,13 +1456,221 @@ async function runMemoryDelete(args: string[]): Promise<void> {
     throw new Error("Usage: lmti memory delete <id>");
   }
   const deleted = await deleteMemory(id, { cwd: process.cwd() });
-  console.log(JSON.stringify({ id, deleted }, null, 2));
+  printSafeJson({ id, deleted }, "memory delete");
+}
+
+async function runCognition(args: string[]): Promise<void> {
+  const [subcommand, ...rest] = args;
+  switch (subcommand) {
+    case "run":
+      await runCognitionCycleCommand(rest, false);
+      return;
+    case "explain":
+      await runCognitionCycleCommand(rest, true);
+      return;
+    case "state":
+      await runCognitionState(rest);
+      return;
+    default:
+      throw new Error('Usage: lmti cognition <run|explain|state> "<task>"');
+  }
+}
+
+async function runCognitionCycleCommand(args: string[], explainOnly: boolean): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const task = positional[0];
+  if (!task) {
+    throw new Error(`Usage: lmti cognition ${explainOnly ? "explain" : "run"} "<task>"`);
+  }
+
+  const role = parseRole(stringFlag(flags, "role") ?? "developer");
+  const context = await contextCommand(process.cwd(), task, {
+    amfPath: positional[1],
+    includeSecret: false,
+    role,
+    flags: { ...flags, "include-secret": false }
+  });
+  const items = contextPackToCognitiveItems(context);
+  const result = runCognitiveCycle({
+    projectId: context.project,
+    task,
+    inferredIntent: context.inferredIntent,
+    contextItems: items,
+    privacyBlocks: context.filteredOut.memories > 0 ? [`${context.filteredOut.memories} memories filtered by privacy or relevance`] : [],
+    subscribers: [
+      { id: "context_builder", role: "local" },
+      { id: "runtime_session", role: "local" },
+      { id: "agent_response_planner", role: stringFlag(flags, "model-target") === "external_model" ? "external_model" : "local" },
+      { id: "memory_consolidation", role: "local" },
+      { id: "insight_engine", role: "local" },
+      { id: "privacy_audit", role: "local" }
+    ]
+  });
+
+  if (explainOnly) {
+    printSafeJson(
+        {
+          task,
+          selectedFocus: result.focus.selectedFocus,
+          phiEstimate: result.state.integratedInformation.normalizedPhi,
+          freeEnergyEstimate: result.state.predictionState.freeEnergyEstimate,
+          fragmentationRisk: result.state.integratedInformation.fragmentationRisk,
+          predictionError: result.predictionError,
+          broadcasts: result.broadcasts,
+          recommendedActions: result.recommendedActions,
+          explanation: result.state.explanation
+        },
+        "cognition explain"
+    );
+    return;
+  }
+
+  printSafeJson(result, "cognition");
+}
+
+async function runCognitionState(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const task = positional[0];
+  if (!task) {
+    console.log(
+      JSON.stringify(
+        {
+          status: "ephemeral",
+          message: "Cognitive state is computed per task and not persisted yet.",
+          next: 'Run `lmti cognition run "<task>"` or `lmti cognition explain "<task>"`.'
+        },
+        null,
+        2
+      )
+    );
+    return;
+  }
+  await runCognitionCycleCommand([task, ...Object.entries(flags).flatMap(([key, value]) => (value === true ? [`--${key}`] : [`--${key}`, String(value)]))], false);
+}
+
+async function runWorld(args: string[]): Promise<void> {
+  const [subcommand, ...rest] = args;
+  switch (subcommand) {
+    case "check":
+      await runWorldCheck(rest, "check");
+      return;
+    case "align":
+      await runWorldCheck(rest, "align");
+      return;
+    case "cost":
+      await runWorldCost(rest);
+      return;
+    case "observe":
+      await runWorldObserve(rest);
+      return;
+    default:
+      throw new Error('Usage: lmti world <check|cost|align|observe> "<task or input>"');
+  }
+}
+
+async function runWorldCheck(args: string[], mode: "check" | "align"): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const task = positional[0];
+  if (!task) {
+    throw new Error(`Usage: lmti world ${mode} "<task>"`);
+  }
+  const context = await contextCommand(process.cwd(), task, {
+    amfPath: positional[1],
+    includeSecret: false,
+    role: parseRole(stringFlag(flags, "role") ?? "developer"),
+    flags: { ...flags, "include-secret": false }
+  });
+  const inputs = contextPackToSensoryInputs(context);
+  const beliefs = contextPackToBeliefs(context);
+  const result = runWorldModelCycle({
+    projectId: context.project,
+    task,
+    inputs,
+    beliefs,
+    budget: {
+      maxTokens: parseNumberFlag(flags, "max-tokens", 1800),
+      maxFiles: parseNumberFlag(flags, "max-files", 12),
+      maxMemoryItems: parseNumberFlag(flags, "max-memory-items", 12),
+      maxComputeCost: parseNumberFlag(flags, "max-compute-cost", 80)
+    }
+  });
+
+  if (mode === "align") {
+    printSafeJson(result.alignment, "world align");
+    return;
+  }
+
+  printSafeJson(
+      {
+        task,
+        blanket: {
+          observations: result.blanket.observations.length,
+          noiseFiltered: result.blanket.noiseFiltered,
+          privacyFiltered: result.blanket.privacyFiltered
+        },
+        cost: result.cost,
+        alignment: {
+          predictionError: result.alignment.predictionError,
+          uncertainty: result.alignment.uncertainty
+        },
+        realityCheck: result.realityCheck,
+        proposedActions: result.proposedActions.map((action) => ({
+          kind: action.kind,
+          title: action.title,
+          riskLevel: action.riskLevel,
+          requiresPermission: action.requiresPermission
+        })),
+        explanation: result.explanation
+      },
+      "world check"
+  );
+}
+
+async function runWorldCost(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const task = positional[0];
+  if (!task) {
+    throw new Error('Usage: lmti world cost "<task>"');
+  }
+  const cost = estimateComputeCost(
+    { text: task, sourceRefs: parseCsv(stringFlag(flags, "source-refs")) },
+    {
+      maxTokens: parseNumberFlag(flags, "max-tokens", 1800),
+      maxFiles: parseNumberFlag(flags, "max-files", 12),
+      maxMemoryItems: parseNumberFlag(flags, "max-memory-items", 12),
+      maxComputeCost: parseNumberFlag(flags, "max-compute-cost", 80)
+    }
+  );
+  printSafeJson(cost, "world cost");
+}
+
+async function runWorldObserve(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const input = positional[0];
+  if (!input) {
+    throw new Error('Usage: lmti world observe "<input>"');
+  }
+  const result = runWorldModelCycle({
+    projectId: stringFlag(flags, "project-id") ?? (await detectProjectId()),
+    task: input,
+    inputs: [{
+      id: "cli-input",
+      source: "user",
+      content: input,
+      sourceRefs: parseCsv(stringFlag(flags, "source-refs")),
+      timestamp: new Date().toISOString(),
+      confidence: parseNumberFlag(flags, "confidence", 0.8),
+      sensitivity: parseSensitivity(stringFlag(flags, "sensitivity") ?? "internal"),
+      promptPolicy: parsePromptPolicy(stringFlag(flags, "prompt-policy") ?? "summarize_only")
+    }]
+  });
+  printSafeJson(result.blanket, "world observe");
 }
 
 async function runRemember(args: string[]): Promise<void> {
   const memory = await rememberCommand(process.cwd(), args);
   warnIfSensitive(memory);
-  console.log(JSON.stringify(safeMemoryForCli(memory), null, 2));
+  printSafeJson(safeMemoryForCli(memory), "remember");
 }
 
 export async function rememberCommand(cwd: string, args: string[]): Promise<MemoryRecord> {
@@ -1207,9 +1708,9 @@ async function runTask(args: string[]): Promise<void> {
     throw new Error('Usage: lmti task done --title "<task title>" --summary "<what changed>" [--lesson "<lesson learned>"]');
   }
   const result = await taskDoneCommand(process.cwd(), rest);
-  console.log(JSON.stringify(result.event, null, 2));
+  printSafeJson(result.event, "task done");
   if (result.lessonMemory) {
-    console.log(JSON.stringify(safeMemoryForCli(result.lessonMemory), null, 2));
+    printSafeJson(safeMemoryForCli(result.lessonMemory), "task lesson");
   }
   if (result.suggestion) {
     console.log(result.suggestion);
@@ -1247,17 +1748,17 @@ async function runPrivacy(args: string[]): Promise<void> {
   switch (subcommand) {
     case "audit":
       if (flags.verify) {
-        console.log(JSON.stringify(await verifyAuditIntegrity(process.cwd()), null, 2));
+        printSafeJson(await verifyAuditIntegrity(process.cwd()), "privacy audit verify");
         return;
       }
       if (flags.retain !== undefined) {
-        console.log(JSON.stringify(await retainAuditEvents(process.cwd(), parseNumberFlag(flags, "retain", 1000)), null, 2));
+        printSafeJson(await retainAuditEvents(process.cwd(), parseNumberFlag(flags, "retain", 1000)), "privacy audit retain");
         return;
       }
-      console.log(JSON.stringify(await readAuditEvents(process.cwd(), parseNumberFlag(flags, "limit", 50)), null, 2));
+      printSafeJson(await readAuditEvents(process.cwd(), parseNumberFlag(flags, "limit", 50)), "privacy audit");
       return;
     case "check":
-      console.log(JSON.stringify(await checkMemoryPrivacy({ cwd: process.cwd() }), null, 2));
+      printSafeJson(await checkMemoryPrivacy({ cwd: process.cwd() }), "privacy check");
       return;
     default:
       throw new Error("Usage: lmti privacy <audit|check>");
@@ -1271,7 +1772,7 @@ async function runBenchmark(args: string[]): Promise<void> {
   }
 
   const result = await benchmarkPreflightCommand(process.cwd(), rest);
-  console.log(JSON.stringify(result, null, 2));
+  printSafeJson(result, "benchmark preflight");
 }
 
 export async function benchmarkPreflightCommand(cwd: string, args: string[]) {
@@ -1328,11 +1829,14 @@ Before making changes, Codex should:
 4. Respect .lmti privacy rules.
 5. Never expose secret memory or confidential project knowledge in raw form.
 6. After completing a task, summarize what changed and suggest what should be stored as long-term memory.
+7. If a task reveals a reusable rule, bug, route, deploy note, permission rule or architecture constraint, prefer \`lmti task done --lesson "..."\` or \`lmti memory consolidate\` over storing raw chat.
 
 Suggested local command:
 
 lmti context "<task>"
 lmti preflight "<task>" --role developer --model-target external_model
+lmti memory explain "<task>"
+lmti memory review
 lmti benchmark preflight "<task>" --runs 5
 ${LMTI_SECTION_END}`;
 
@@ -1382,6 +1886,24 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function assertPathInsideCwd(cwd: string, targetPath: string, label: string): void {
+  const root = path.resolve(cwd);
+  const relative = path.relative(root, path.resolve(targetPath));
+  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
+    return;
+  }
+  throw new Error(`${label} must stay inside the project directory.`);
+}
+
+function printSafeJson(value: unknown, label: string): void {
+  const serialized = JSON.stringify(value, null, 2);
+  const scan = runEgressSecretScan(serialized);
+  if (scan.blocked) {
+    console.warn(`[LMTI] ${label} output matched secret patterns and was redacted before printing.`);
+  }
+  console.log(redactText(serialized));
+}
+
 function printHelp(): void {
   console.log(`LMTI - Atlas
 
@@ -1389,7 +1911,7 @@ Usage:
   lmti init [--yes]
   lmti compile [projectPath]
   lmti migrate [--yes]
-  lmti doctor [--fix]
+  lmti doctor [--fix|--security]
   lmti inspect [amfPath]
   lmti context "<task>" [amfPath] [--include-secret]
   lmti preflight "<task>" [amfPath] [--role developer] [--model-target external_model]
@@ -1398,8 +1920,21 @@ Usage:
   lmti memory add --scope short_term --kind task --title "..." --content "..."
   lmti memory list [--scope short_term|long_term] [--role developer]
   lmti memory search "<query>" [--role agent] [--include-secret]
+  lmti memory consolidate
+  lmti memory decay
+  lmti memory reinforce <id> --success true|false
+  lmti memory review
+  lmti memory associations <id>
+  lmti memory explain "<query>"
   lmti memory promote <id>
   lmti memory delete <id>
+  lmti cognition run "<task>"
+  lmti cognition explain "<task>"
+  lmti cognition state ["<task>"]
+  lmti world check "<task>"
+  lmti world cost "<task>"
+  lmti world align "<task>"
+  lmti world observe "<input>"
   lmti remember --kind lesson --title "..." --content "..." --tags a,b --prompt-policy summarize_only
   lmti task done --title "..." --summary "..." [--lesson "..."]
   lmti privacy audit [--verify|--retain 1000]
@@ -1410,13 +1945,15 @@ Commands:
   init      Create local .lmti storage.
   compile   Compile a project into .lmti/project.amf.json.
   migrate   Copy legacy Atlas state into canonical .lmti storage.
-  doctor    Diagnose duplicate or incomplete Atlas/LMTI storage.
+  doctor    Diagnose duplicate/incomplete storage or security posture.
   inspect   Print Project Mind stats from AMF.
   context   Build a Context Pack JSON from AMF and a task.
   preflight Build a policy-safe MVP context package with hard memory gates.
   experiment Run local LMTI experiments.
   attach    Attach local LMTI guidance to Codex.
   memory    Manage local structured ATLAS memory.
+  cognition Run the deterministic Cognitive Orchestrator.
+  world     Run Reality Boundary and resource-bounded active inference checks.
   remember  Store a deliberate project lesson, rule or decision.
   task      Record completed task events and optional lessons.
   privacy   Inspect Cognitive Privacy audit and memory safety.
@@ -1540,6 +2077,20 @@ function parseNumberFlag(flags: Record<string, FlagValue>, key: string, fallback
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseBooleanFlag(flags: Record<string, FlagValue>, key: string, fallback = true): boolean {
+  const value = flags[key];
+  if (value === undefined) {
+    return fallback;
+  }
+  if (value === true) {
+    return true;
+  }
+  if (typeof value === "string") {
+    return value.toLowerCase() === "true" || value === "1" || value.toLowerCase() === "yes";
+  }
+  return false;
 }
 
 function percentile(sortedValues: number[], percentileValue: number): number {

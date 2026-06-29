@@ -51,6 +51,15 @@ export type MemoryKind =
 
 export type MemorySensitivity = SensitivityLevel;
 
+export type MemoryStatus = "active" | "weak" | "archived" | "superseded";
+
+export interface MemoryAssociation {
+  targetMemoryId: string;
+  weight: number;
+  reason: string;
+  createdAt: string;
+}
+
 export interface MemoryRecord {
   id: string;
   scope: MemoryScope;
@@ -67,6 +76,26 @@ export interface MemoryRecord {
   createdAt: string;
   updatedAt: string;
   expiresAt?: string;
+  memoryStrength?: number;
+  baseActivation?: number;
+  retrievalCount?: number;
+  lastRetrievedAt?: string;
+  lastReinforcedAt?: string;
+  decayRate?: number;
+  stability?: number;
+  priorityScore?: number;
+  emotionalWeight?: number;
+  contextCues?: string[];
+  associations?: MemoryAssociation[];
+  supersededBy?: string;
+  status?: MemoryStatus;
+  nextReviewAt?: string;
+  reviewIntervalDays?: number;
+  easinessFactor?: number;
+  reviewCount?: number;
+  negativeCues?: string[];
+  inferredIntent?: InferredIntent;
+  privacySafeSummary?: string;
   version: number;
 }
 
@@ -88,6 +117,26 @@ export type MemoryPatch = Partial<
     | "sensitivity"
     | "promptPolicy"
     | "expiresAt"
+    | "memoryStrength"
+    | "baseActivation"
+    | "retrievalCount"
+    | "lastRetrievedAt"
+    | "lastReinforcedAt"
+    | "decayRate"
+    | "stability"
+    | "priorityScore"
+    | "emotionalWeight"
+    | "contextCues"
+    | "associations"
+    | "supersededBy"
+    | "status"
+    | "nextReviewAt"
+    | "reviewIntervalDays"
+    | "easinessFactor"
+    | "reviewCount"
+    | "negativeCues"
+    | "inferredIntent"
+    | "privacySafeSummary"
   >
 >;
 
@@ -110,7 +159,15 @@ export interface MemorySearchResult {
   why?: string[];
   intentMatch?: number;
   keywordMatch?: number;
+  lexicalScore?: number;
+  activation?: number;
+  baseActivation?: number;
+  associationScore?: number;
+  priorityScore?: number;
+  contextCueMatch?: number;
   negativeKeywordPenalty?: number;
+  privacyPenalty?: number;
+  filteredOutReason?: string;
 }
 
 export interface ContextMemory {
@@ -128,4 +185,5 @@ export interface ContextMemory {
   mode?: Exclude<MemoryContextMode, "excluded">;
   why?: string[];
   score: number;
+  activation?: number;
 }

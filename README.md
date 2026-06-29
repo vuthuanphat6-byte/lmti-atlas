@@ -72,6 +72,136 @@ It should NOT blindly remember:
 * every prompt
 * every random note
 
+## Long-Term Memory Engine
+
+Long-term memory now has a lifecycle:
+
+```text
+Input Event
+  -> Encode
+  -> Short-Term Buffer
+  -> Consolidate
+  -> Long-Term Memory
+  -> Retrieve
+  -> Reinforce / Decay
+```
+
+Each long-term memory can carry activation metadata such as `memoryStrength`,
+`baseActivation`, `retrievalCount`, `decayRate`, `stability`, `priorityScore`,
+`contextCues`, associations, supersession status and review scheduling.
+
+Retrieval is no longer only keyword search. LMTI combines lexical match, task
+intent, context cues, association weight, priority, recency/decay and privacy
+penalties. `secret` and `do_not_prompt` memories are excluded from normal
+context, confidential memory is summarized, and superseded or archived memory is
+kept as history instead of source truth.
+
+Useful commands:
+
+```bash
+node packages/cli/dist/index.js memory consolidate
+node packages/cli/dist/index.js memory decay
+node packages/cli/dist/index.js memory reinforce <id> --success true
+node packages/cli/dist/index.js memory reinforce <id> --success false
+node packages/cli/dist/index.js memory review
+node packages/cli/dist/index.js memory associations <id>
+node packages/cli/dist/index.js memory explain "partner permission route"
+```
+
+After a task reveals reusable project knowledge, record a lesson deliberately:
+
+```bash
+node packages/cli/dist/index.js task done --title "..." --summary "..." --lesson "..."
+```
+
+## Cognitive Orchestrator
+
+`@atlas/cognition` adds the deterministic orchestration layer above memory,
+kernel, privacy and runtime. It does not claim consciousness. It estimates
+context integration, tracks prediction error, arbitrates global workspace focus
+and broadcasts only policy-safe summaries or metadata.
+
+```bash
+node packages/cli/dist/index.js cognition run "dashboard Agent 403 permission"
+node packages/cli/dist/index.js cognition explain "dashboard Agent 403 permission"
+node packages/cli/dist/index.js cognition state
+```
+
+The cognition package consumes already-selected context candidates. It does not
+read raw secret memory, call external AI APIs or duplicate kernel Context Pack
+scoring.
+
+## World Model
+
+`@atlas/world-model` adds a Reality Boundary between the internal project mind
+and external observations such as user input, source evidence, test output, CLI
+output and tool/runtime signals.
+
+It treats memory as prior belief, not reality. Source code, tests, tool output
+and explicit user instruction are observations. When memory conflicts with an
+observation, the world model lowers confidence, reports prediction error and
+proposes the next safe action. It never executes tools directly.
+
+```bash
+node packages/cli/dist/index.js world check "fix partner dashboard 403"
+node packages/cli/dist/index.js world cost "fix partner dashboard 403"
+node packages/cli/dist/index.js world align "fix partner dashboard 403"
+node packages/cli/dist/index.js world observe "current test output summary"
+```
+
+All sensory input passes through a Markov Blanket. Secret-like content is
+redacted and marked `do_not_prompt` before it can enter cognition or context.
+
+## Neural Architecture Boundaries
+
+ATLAS now keeps one source of truth per cognitive responsibility:
+
+```text
+@atlas/types
+  -> shared AMF, Context Pack and memory/privacy contracts
+@atlas/kernel
+  -> intent inference and Context Pack scoring
+@atlas/memory
+  -> memory lifecycle, retrieval, consolidation and privacy-safe summaries
+@atlas/privacy
+  -> access policy, redaction, hard gates and egress scans
+@atlas/cognition
+  -> cognitive focus, global workspace and Context Pack -> cognition mapping
+@atlas/world-model
+  -> observations, beliefs, reality checks and Context Pack -> world mapping
+@atlas/runtime
+  -> orchestrates memory, kernel, cognition, tools and security
+@atlas/cli
+  -> parses commands and prints package results
+```
+
+`@atlas/runtime` must not own Context Pack scoring. It re-exports the old
+`buildContextPack`, `inspectAmf` and `formatInspection` APIs from
+`@atlas/kernel` for compatibility. CLI commands remain stable while cognition
+and world-model conversion logic lives in their domain packages.
+
+## Security Model
+
+LMTI treats project knowledge as sensitive by default.
+
+- Local-first: no external AI API is required.
+- No raw secret export: CLI and adapter output pass through redaction/egress scanning.
+- Privacy-gated memory: `secret` and `do_not_prompt` memory cannot enter normal context.
+- Policy-safe adapter output: adapters default to `external_model`, no raw secret, no raw confidential.
+- Tool execution through `SecurityGuard`: dangerous permissions are denied by default.
+- Target projects are untrusted input: compile reads files only, skips ignored secret files and symlinks, and does not execute target code.
+- Memory is prior belief, not verified truth: source/test/tool/user evidence wins in security-sensitive flows.
+
+Security docs:
+
+```text
+docs/security/THREAT_MODEL.md
+docs/security/PRIVACY_POLICY.md
+docs/security/SECURITY_BOUNDARIES.md
+docs/security/ADAPTER_SECURITY.md
+docs/security/SECURITY_CHECKLIST.md
+```
+
 ## Current Scope
 
 LMTI - Atlas is currently a local PoC for compiling project knowledge,

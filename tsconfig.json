@@ -1,4 +1,8 @@
 {
+  "compilerOptions": {
+    "strict": true,
+    "forceConsistentCasingInFileNames": true
+  },
   "files": [],
   "references": [
     { "path": "packages/types" },
@@ -14,6 +18,8 @@
     { "path": "packages/kernel" },
     { "path": "packages/mcp" },
     { "path": "packages/reasoning" },
+    { "path": "packages/cognition" },
+    { "path": "packages/world-model" },
     { "path": "packages/runtime" },
     { "path": "packages/cli" },
     { "path": "apps/playground" },
