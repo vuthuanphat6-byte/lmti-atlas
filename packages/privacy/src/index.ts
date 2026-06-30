@@ -432,13 +432,13 @@ const SECRET_REDACTION_PATTERNS: Array<{ regex: RegExp; replacement: string }> =
   { regex: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED_GITHUB_TOKEN]" },
   { regex: /\b(?:sk|pk)_(?:test|live)_[A-Za-z0-9_]{8,}\b/g, replacement: "[REDACTED_STRIPE_KEY]" },
   { regex: /\bAKIA[0-9A-Z]{16}\b/g, replacement: "[REDACTED_AWS_KEY]" },
-  { regex: /\baws[_-]?secret[_-]?access[_-]?key\b\s*[:=]\s*["']?[^"'\s]{16,}/gi, replacement: "aws_secret_access_key=[REDACTED]" },
+  { regex: /\baws[_-]?secret[_-]?access[_-]?key\b\s*[:=]\s*["']?[^"'\s<>]{16,}/gi, replacement: "aws_secret_access_key=[REDACTED]" },
   { regex: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, replacement: "[REDACTED_JWT]" },
-  { regex: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s"']+/gi, replacement: "[REDACTED_DATABASE_URL]" },
-  { regex: /\b(?:client[_-]?secret|oauth[_-]?secret)\b\s*[:=]\s*["']?[^"'\s]{8,}/gi, replacement: "oauth_secret=[REDACTED]" },
-  { regex: /\b(?:cookie|set-cookie|session(?:[_-]?id)?|session[_-]?secret)\b\s*[:=]\s*["']?[^"'\s;]{8,}/gi, replacement: "session=[REDACTED]" },
-  { regex: /\b(api[_-]?key|secret|token|password|passwd|private[_-]?key)\b\s*[:=]\s*["']?[^"'\s]+/gi, replacement: "$1=[REDACTED]" },
-  { regex: /\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|COOKIE|SESSION)[A-Z0-9_]*)\s*=\s*["']?[^"'\s]+/g, replacement: "$1=[REDACTED]" }
+  { regex: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s"'<>]+/gi, replacement: "[REDACTED_DATABASE_URL]" },
+  { regex: /\b(?:client[_-]?secret|oauth[_-]?secret)\b\s*[:=]\s*["']?[^"'\s<>]{8,}/gi, replacement: "oauth_secret=[REDACTED]" },
+  { regex: /\b(?:cookie|set-cookie|session(?:[_-]?id)?|session[_-]?secret)\b\s*[:=]\s*["']?[^"'\s;<>]{8,}/gi, replacement: "session=[REDACTED]" },
+  { regex: /\b(api[_-]?key|secret|token|password|passwd|private[_-]?key)\b\s*[:=]\s*["']?[^"'\s<>]+/gi, replacement: "$1=[REDACTED]" },
+  { regex: /\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|COOKIE|SESSION)[A-Z0-9_]*)\s*=\s*["']?[^"'\s<>]+/g, replacement: "$1=[REDACTED]" }
 ];
 
 function stricterRole(left: AccessRole, right: AccessRole): AccessRole {

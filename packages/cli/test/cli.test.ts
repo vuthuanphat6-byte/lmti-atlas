@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createMemory } from "@atlas/memory";
-import { attachCodex, benchmarkPreflightCommand, compileCommand, contextCommand, doctorSecurityCommand, initCommand, preflightCommand, rememberCommand, taskDoneCommand, thinkingExperimentCommand } from "../src/index";
+import { attachCodex, benchmarkPreflightCommand, compileCommand, contextCommand, doctorSecurityCommand, initCommand, main, preflightCommand, rememberCommand, taskDoneCommand, thinkingExperimentCommand } from "../src/index";
 
 const githubTokenFixture = ["ghp", "abcdefghijklmnopqrstuvwxyz123456"].join("_");
 
@@ -88,6 +88,32 @@ async function writeLegacyAmf(filePath: string, name: string): Promise<void> {
     ),
     "utf8"
   );
+}
+
+async function runCliInFixture(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  const originalCwd = process.cwd();
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+
+  console.log = (...values: unknown[]) => {
+    stdout.push(values.map(String).join(" "));
+  };
+  console.warn = (...values: unknown[]) => {
+    stderr.push(values.map(String).join(" "));
+  };
+
+  try {
+    process.chdir(cwd);
+    await main(args);
+  } finally {
+    process.chdir(originalCwd);
+    console.log = originalLog;
+    console.warn = originalWarn;
+  }
+
+  return { stdout: stdout.join("\n"), stderr: stderr.join("\n") };
 }
 
 describe("LMTI CLI commands", () => {
@@ -527,5 +553,154 @@ describe("LMTI CLI commands", () => {
     await initCommand(cwd);
 
     await expect(thinkingExperimentCommand(cwd, "fix packing label bug")).rejects.toThrow("Run `lmti compile` first");
+  });
+
+  it("actions CLI records a session lifecycle and returns detail", async () => {
+    const cwd = await createFixtureProject();
+    const start = JSON.parse(
+      (await runCliInFixture(cwd, ["actions", "start", "--task", "Fix dashboard Agent 403", "--branch", "feature/actions"])).stdout
+    ) as { id: string; status: string; task: string };
+
+    expect(start.status).toBe("running");
+    expect(start.task).toBe("Fix dashboard Agent 403");
+
+    await runCliInFixture(cwd, [
+      "actions",
+      "log",
+      "--session-id",
+      start.id,
+      "--type",
+      "file_modified",
+      "--file",
+      "src/auth/middleware.ts",
+      "--diff-summary",
+      "Adjusted role guard after source review",
+      "--lines-added",
+      "2",
+      "--lines-removed",
+      "1"
+    ]);
+    await runCliInFixture(cwd, [
+      "actions",
+      "command",
+      "--session-id",
+      start.id,
+      "--command",
+      "npm test",
+      "--exit-code",
+      "0",
+      "--duration-ms",
+      "1200",
+      "--output-summary",
+      "tests passed"
+    ]);
+    await runCliInFixture(cwd, [
+      "actions",
+      "decision",
+      "--session-id",
+      start.id,
+      "--decision",
+      "Keep least privilege",
+      "--reason",
+      "403 remains valid for users outside the allowed role",
+      "--related-files",
+      "src/auth/middleware.ts",
+      "--related-memory-ids",
+      "mem-1"
+    ]);
+    await runCliInFixture(cwd, [
+      "actions",
+      "memory",
+      "--session-id",
+      start.id,
+      "--memory-id",
+      "mem-1",
+      "--memory-type",
+      "long",
+      "--used-in-decision"
+    ]);
+    await runCliInFixture(cwd, [
+      "actions",
+      "reflection",
+      "--session-id",
+      start.id,
+      "--summary",
+      "Fixed permission route safely",
+      "--tests-run",
+      "npm test"
+    ]);
+    await runCliInFixture(cwd, ["actions", "end", "--session-id", start.id, "--status", "completed"]);
+
+    const detail = JSON.parse((await runCliInFixture(cwd, ["actions", "show", start.id])).stdout) as {
+      session: { status: string };
+      fileEvents: Array<{ filePath: string; linesAdded: number }>;
+      commandEvents: Array<{ command: string; exitCode: number }>;
+      decisions: Array<{ relatedMemoryIds: string[] }>;
+      memoryUsage: Array<{ memoryId: string; usedInDecision: boolean }>;
+      reflections: Array<{ testsRun: string[] }>;
+    };
+
+    expect(detail.session.status).toBe("completed");
+    expect(detail.fileEvents[0]?.filePath).toBe("src/auth/middleware.ts");
+    expect(detail.fileEvents[0]?.linesAdded).toBe(2);
+    expect(detail.commandEvents[0]).toMatchObject({ command: "npm test", exitCode: 0 });
+    expect(detail.decisions[0]?.relatedMemoryIds).toContain("mem-1");
+    expect(detail.memoryUsage[0]).toMatchObject({ memoryId: "mem-1", usedInDecision: true });
+    expect(detail.reflections[0]?.testsRun).toContain("npm test");
+  });
+
+  it("framework CLI detects project framework and writes default config", async () => {
+    const cwd = await createFixtureProject();
+    await writeFile(path.join(cwd, "next.config.ts"), "export default {};", "utf8");
+    await writeFile(
+      path.join(cwd, "package.json"),
+      JSON.stringify({ name: "lmti-fixture", private: true, dependencies: { next: "latest", react: "latest" } }, null, 2),
+      "utf8"
+    );
+
+    const result = JSON.parse((await runCliInFixture(cwd, ["framework", "detect", "--json"])).stdout) as {
+      primaryFramework: string;
+      packageManager?: string;
+      evidence: string[];
+    };
+
+    expect(result.primaryFramework).toBe("nextjs");
+    expect(result.evidence.join("\n")).toContain("next");
+    await expect(readFile(path.join(cwd, ".lmti", "frameworks.yml"), "utf8")).resolves.toContain("confidence_threshold");
+  });
+
+  it("actions CLI redacts secret-like summaries and can render replay HTML", async () => {
+    const cwd = await createFixtureProject();
+    const rawSecret = "OPENAI_API_KEY=sk-proj-FAKE_TEST_VALUE_12345678901234567890";
+    const startResult = await runCliInFixture(cwd, ["actions", "start", "--task", "Investigate leaked env"]);
+    const start = JSON.parse(startResult.stdout) as { id: string };
+
+    expect(start.id).toBeTruthy();
+
+    const commandResult = await runCliInFixture(cwd, [
+      "actions",
+      "command",
+      "--session-id",
+      start.id,
+      "--command",
+      "npm test",
+      "--exit-code",
+      "0",
+      "--output-summary",
+      `test output contained ${rawSecret}`
+    ]);
+    const command = JSON.parse(commandResult.stdout) as { outputSummary?: string };
+
+    expect(JSON.stringify(command)).not.toContain(rawSecret);
+    expect(JSON.stringify(command)).toContain("REDACTED");
+
+    const detailHtml = (await runCliInFixture(cwd, ["actions", "show", start.id, "--html"])).stdout;
+    const replayHtml = (await runCliInFixture(cwd, ["actions", "replay", start.id, "--html"])).stdout;
+
+    expect(detailHtml).toContain("<!doctype html>");
+    expect(detailHtml).toContain("REDACTED");
+    expect(detailHtml).not.toContain(rawSecret);
+    expect(replayHtml).toContain("LMTI Codex Replay");
+    expect(replayHtml).not.toContain(rawSecret);
   });
 });

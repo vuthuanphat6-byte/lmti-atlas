@@ -4,22 +4,39 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { readAuditEvents } from "@atlas/privacy";
 import {
+  addProjectMemory,
+  checkProjectMemoryPrivacy,
+  classifyLibraryMemory,
+  cleanupShortMemoryNotes,
   consolidateMemory,
   createMemory,
+  createShortMemoryNote,
   decayMemory,
   decayMemoryLifecycle,
+  deleteProjectMemory,
   encodeMemory,
+  evaluateShortMemoryForPromotion,
   explainMemory,
+  expireShortMemoryNotes,
   getMemoryAssociations,
+  getProjectMemoryStats,
   InMemoryStore,
+  initProjectMemoryStorage,
   listMemory,
   LongTermMemory,
   promoteMemory,
   recordTaskDone,
+  promoteShortMemoryToLongMemory,
+  retrieveMemoryContextForTask,
   reinforceMemory,
+  retrieveMemoryForTask,
+  retrieveShortMemoryForTask,
+  saveLessonAfterTask,
   searchMemory,
   searchMemoryForContext,
-  ShortTermMemory
+  searchProjectMemory,
+  ShortTermMemory,
+  updateProjectMemory
 } from "../src/index";
 import type { InferredIntent } from "@atlas/types";
 
@@ -604,5 +621,292 @@ describe("Memory Core MVP-2", () => {
 
     expect(result.results[0]?.mode).toBe("summary");
     expect(JSON.stringify(result.results)).not.toContain("Internal implementation detail");
+  });
+});
+
+describe("Project Operating Memory SQLite Library Layer", () => {
+  it("initializes SQLite storage and stores normal memory", async () => {
+    const cwd = await createWorkspace();
+    const storage = await initProjectMemoryStorage(cwd);
+    const memory = await addProjectMemory(
+      {
+        title: "Packing workflow rule",
+        content: "ERP order packing workflow must verify destination before shipping.",
+        source: "test",
+        sourceType: "manual"
+      },
+      { cwd }
+    );
+    const stats = await getProjectMemoryStats({ cwd });
+
+    expect(storage.dbPath.endsWith("project-memory.sqlite")).toBe(true);
+    expect(memory.zone).toBe("workflow");
+    expect(stats.total).toBe(1);
+    expect(stats.byZone.workflow).toBe(1);
+  });
+
+  it("uses FTS5 search and BM25-backed ranking", async () => {
+    const cwd = await createWorkspace();
+    const target = await addProjectMemory(
+      {
+        title: "Production deploy rollback",
+        content: "Deploy production with healthcheck and rollback note.",
+        source: "deploy-doc"
+      },
+      { cwd }
+    );
+    await addProjectMemory(
+      {
+        title: "Logo color note",
+        content: "Dashboard logo brand color should stay aligned.",
+        source: "design-doc"
+      },
+      { cwd }
+    );
+
+    const results = await searchProjectMemory("production healthcheck rollback", { cwd, limit: 3 });
+
+    expect(results[0]?.item.id).toBe(target.id);
+    expect(results[0]?.score).toBeGreaterThan(0);
+  });
+
+  it("classifies required library zones", () => {
+    expect(classifyLibraryMemory({ content: "PM2 deploy release healthcheck rollback" }).zone).toBe("deployment");
+    expect(classifyLibraryMemory({ content: "ERP order credit pricing business rule" }).zone).toBe("business");
+    expect(classifyLibraryMemory({ content: "Module service API worker database boundary" }).zone).toBe("architecture");
+    expect(classifyLibraryMemory({ content: "small note without durable meaning" }).zone).toBe("unknown");
+  });
+
+  it("redacts secret-like content before storing and blocks it from retrieval", async () => {
+    const cwd = await createWorkspace();
+    const rawSecret = "OPENAI_API_KEY=sk-proj-FAKE_TEST_VALUE_12345678901234567890";
+    const memory = await addProjectMemory(
+      {
+        title: "Deployment env secret",
+        content: `Do not store raw .env values. ${rawSecret}`,
+        source: "test"
+      },
+      { cwd }
+    );
+
+    expect(["secret", "do_not_prompt"]).toContain(memory.privacyLevel);
+    expect(memory.content).not.toContain(rawSecret);
+    expect(await searchProjectMemory("Deployment env secret", { cwd })).toHaveLength(0);
+    expect(await checkProjectMemoryPrivacy({ cwd })).toHaveLength(0);
+  });
+
+  it("does not retrieve secret or do_not_prompt memories for task context", async () => {
+    const cwd = await createWorkspace();
+    await addProjectMemory(
+      {
+        title: "Secret dashboard token",
+        content: "access_token=FAKE_TEST_TOKEN_VALUE_123456789012345678901234",
+        zone: "security",
+        privacyLevel: "secret"
+      },
+      { cwd }
+    );
+    await addProjectMemory(
+      {
+        title: "Private key fixture",
+        content: "PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----FAKE-----END RSA PRIVATE KEY-----",
+        zone: "security",
+        privacyLevel: "do_not_prompt"
+      },
+      { cwd }
+    );
+
+    const results = await retrieveMemoryForTask("fix dashboard token permission", { cwd, privacyMode: "internal" });
+
+    expect(results).toHaveLength(0);
+    expect(JSON.stringify(results)).not.toContain("FAKE_TEST_TOKEN");
+  });
+
+  it("retrieves dashboard 403 lessons without unrelated logo memory", async () => {
+    const cwd = await createWorkspace();
+    await addProjectMemory(
+      {
+        title: "Partner dashboard 403 lesson",
+        content: "Partner user must route to /partner. Dashboard 403 is correct under least privilege.",
+        zone: "lesson",
+        tags: ["partner", "dashboard", "403", "permission"],
+        importance: 0.95
+      },
+      { cwd }
+    );
+    await addProjectMemory(
+      {
+        title: "Dashboard logo rule",
+        content: "Dashboard logo brand asset alignment note.",
+        zone: "codebase",
+        tags: ["dashboard", "logo", "brand"],
+        importance: 0.95
+      },
+      { cwd }
+    );
+
+    const results = await retrieveMemoryForTask("fix partner dashboard 403 permission", { cwd, limit: 5 });
+
+    expect(results.map((result) => result.item.title)).toContain("Partner dashboard 403 lesson");
+    expect(results.map((result) => result.item.title)).not.toContain("Dashboard logo rule");
+  });
+
+  it("saves post-task lessons and retrieves them by matching intent", async () => {
+    const cwd = await createWorkspace();
+    const saved = await saveLessonAfterTask(
+      {
+        task: "Partner dashboard 403 route fix",
+        whatChanged: "Confirmed route behavior.",
+        fixApplied: "Documented least privilege behavior.",
+        lesson: "Partner user must route through /partner; dashboard 403 can be expected.",
+        filesTouched: ["packages/memory/src/sqlite-store.ts"],
+        risk: "permission regression"
+      },
+      { cwd }
+    );
+
+    const retrieved = await retrieveMemoryForTask("partner dashboard permission 403", { cwd, limit: 5 });
+
+    expect(saved.lesson.zone).toBe("lesson");
+    expect(retrieved.map((result) => result.item.id)).toContain(saved.lesson.id);
+  });
+
+  it("keeps FTS triggers in sync on update and delete", async () => {
+    const cwd = await createWorkspace();
+    const memory = await addProjectMemory(
+      {
+        title: "Deploy alpha note",
+        content: "Rollback alpha release plan.",
+        zone: "deployment"
+      },
+      { cwd }
+    );
+
+    expect(await searchProjectMemory("alpha", { cwd })).toHaveLength(1);
+    await updateProjectMemory(memory.id, { title: "Deploy beta note", content: "Rollback beta release plan.", tags: ["deploy", "beta"] }, { cwd });
+    expect(await searchProjectMemory("beta", { cwd })).toHaveLength(1);
+    expect(await searchProjectMemory("alpha", { cwd })).toHaveLength(0);
+    expect(await deleteProjectMemory(memory.id, { cwd })).toBe(true);
+    expect(await searchProjectMemory("beta", { cwd })).toHaveLength(0);
+  });
+
+  it("stores short memory as expiring task notes and retrieves by current task", async () => {
+    const cwd = await createWorkspace();
+    const now = new Date("2026-06-30T00:00:00.000Z");
+    const note = await createShortMemoryNote(
+      {
+        title: "Current debug checkpoint",
+        content: "Temporary note: inspect SQLite short memory retrieval and build output next.",
+        tags: ["debug", "sqlite"],
+        priority: "low"
+      },
+      { cwd, now }
+    );
+
+    const ttlMs = new Date(note.expiresAt).getTime() - now.getTime();
+    const retrieved = await retrieveShortMemoryForTask("inspect sqlite short memory build output", { cwd, now, limit: 3 });
+
+    expect(ttlMs).toBe(6 * 3_600_000);
+    expect(retrieved.notes.map((entry) => entry.id)).toContain(note.id);
+    expect(retrieved.notes[0]?.reason).toContain("priority=low");
+  });
+
+  it("expires and cleans up weak short memory without promoting scratch notes", async () => {
+    const cwd = await createWorkspace();
+    const now = new Date("2026-06-30T00:00:00.000Z");
+    const note = await createShortMemoryNote(
+      {
+        title: "Scratch output",
+        content: "Temporary one-time build output scratch note.",
+        priority: "low",
+        ttl: { minutes: 1 }
+      },
+      { cwd, now }
+    );
+
+    const expired = await expireShortMemoryNotes({ cwd, now: new Date("2026-06-30T00:02:00.000Z") });
+    const activeResults = await retrieveShortMemoryForTask("scratch build output", { cwd, now: new Date("2026-06-30T00:02:00.000Z") });
+    const cleanup = await cleanupShortMemoryNotes({
+      cwd,
+      now: new Date("2026-07-01T01:02:00.000Z"),
+      deleteExpiredOlderThanHours: 24
+    });
+    const afterCleanup = await retrieveShortMemoryForTask("scratch build output", {
+      cwd,
+      now: new Date("2026-07-01T01:02:00.000Z"),
+      includeExpired: true
+    });
+
+    expect(expired.expired).toBe(1);
+    expect(activeResults.notes).toHaveLength(0);
+    expect(cleanup.deleted).toBe(1);
+    expect(cleanup.candidateIds).toContain(note.id);
+    expect(afterCleanup.notes.map((entry) => entry.id)).not.toContain(note.id);
+  });
+
+  it("blocks secret-like short notes from retrieval and promotion", async () => {
+    const cwd = await createWorkspace();
+    const rawSecret = "access_token=FAKE_TEST_TOKEN_VALUE_123456789012345678901234";
+    const note = await createShortMemoryNote(
+      {
+        title: "Secret dashboard token",
+        content: `Do not leak this credential. ${rawSecret}`,
+        tags: ["dashboard", "token"],
+        priority: "critical"
+      },
+      { cwd }
+    );
+
+    const retrieved = await retrieveShortMemoryForTask("dashboard token", { cwd, privacyMode: "internal" });
+    const evaluation = await evaluateShortMemoryForPromotion(note.id, { cwd });
+    const promoted = await promoteShortMemoryToLongMemory({ noteId: note.id, force: true }, { cwd });
+
+    expect(note.content).not.toContain(rawSecret);
+    expect(note.privacyLevel).toBe("secret");
+    expect(retrieved.notes).toHaveLength(0);
+    expect(retrieved.filteredOut).toBeGreaterThan(0);
+    expect(evaluation.blocked).toBe(true);
+    expect(promoted.promoted).toBe(false);
+    expect(await searchProjectMemory("Secret dashboard token", { cwd, privacyMode: "internal" })).toHaveLength(0);
+  });
+
+  it("promotes durable short notes into long memory and returns combined task context", async () => {
+    const cwd = await createWorkspace();
+    const note = await createShortMemoryNote(
+      {
+        title: "Partner dashboard 403 lesson candidate",
+        content: "Remember important long-term lesson: partner dashboard 403 is a least privilege permission rule and should be documented after debugging.",
+        tags: ["partner", "dashboard", "permission", "lesson"],
+        priority: "critical"
+      },
+      { cwd }
+    );
+    await createShortMemoryNote(
+      {
+        title: "Current work checkpoint",
+        content: "Current task is checking short memory context retrieval before build.",
+        tags: ["memory", "context"],
+        priority: "medium"
+      },
+      { cwd }
+    );
+
+    const evaluation = await evaluateShortMemoryForPromotion(note.id, { cwd });
+    const promoted = await promoteShortMemoryToLongMemory({ noteId: note.id, reason: "Durable permission lesson" }, { cwd });
+    const longResults = await searchProjectMemory("partner dashboard 403 permission", { cwd, privacyMode: "internal" });
+    const context = await retrieveMemoryContextForTask("checking memory context retrieval partner dashboard permission", {
+      cwd,
+      shortLimit: 3,
+      longLimit: 3,
+      privacyMode: "internal"
+    });
+
+    expect(evaluation.shouldSuggest).toBe(true);
+    expect(promoted.promoted).toBe(true);
+    expect(promoted.note.status).toBe("promoted");
+    expect(promoted.longMemory?.source).toBe(`short-memory:${note.id}`);
+    expect(longResults.map((result) => result.item.id)).toContain(promoted.longMemory?.id);
+    expect(context.shortMemory.some((entry) => entry.title === "Current work checkpoint")).toBe(true);
+    expect(context.longMemory.some((entry) => entry.item.id === promoted.longMemory?.id)).toBe(true);
   });
 });

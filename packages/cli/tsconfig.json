@@ -8,10 +8,12 @@
   "references": [
     { "path": "../types" },
     { "path": "../compiler" },
+    { "path": "../frameworks" },
     { "path": "../kernel" },
     { "path": "../migration" },
     { "path": "../memory" },
-    { "path": "../privacy" }
+    { "path": "../privacy" },
+    { "path": "../runtime" }
   ],
   "include": ["src/**/*.ts"]
 }

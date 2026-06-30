@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@atlas/frameworks':
+        specifier: workspace:*
+        version: link:packages/frameworks
       '@atlas/types':
         specifier: workspace:*
         version: link:packages/types
@@ -65,6 +68,9 @@ importers:
       '@atlas/compiler':
         specifier: workspace:*
         version: link:../compiler
+      '@atlas/frameworks':
+        specifier: workspace:*
+        version: link:../frameworks
       '@atlas/kernel':
         specifier: workspace:*
         version: link:../kernel
@@ -113,6 +119,12 @@ importers:
       '@atlas/security':
         specifier: workspace:*
         version: link:../security
+
+  packages/frameworks:
+    dependencies:
+      '@atlas/privacy':
+        specifier: workspace:*
+        version: link:../privacy
 
   packages/graph:
     dependencies:
@@ -176,6 +188,9 @@ importers:
       '@atlas/context':
         specifier: workspace:*
         version: link:../context
+      '@atlas/frameworks':
+        specifier: workspace:*
+        version: link:../frameworks
       '@atlas/kernel':
         specifier: workspace:*
         version: link:../kernel

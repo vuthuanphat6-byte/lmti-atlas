@@ -9,6 +9,7 @@
     { "path": "../agents" },
     { "path": "../cognition" },
     { "path": "../context" },
+    { "path": "../frameworks" },
     { "path": "../kernel" },
     { "path": "../memory" },
     { "path": "../privacy" },

@@ -8,6 +8,7 @@
     "@atlas/agents": "workspace:*",
     "@atlas/cognition": "workspace:*",
     "@atlas/context": "workspace:*",
+    "@atlas/frameworks": "workspace:*",
     "@atlas/kernel": "workspace:*",
     "@atlas/memory": "workspace:*",
     "@atlas/privacy": "workspace:*",

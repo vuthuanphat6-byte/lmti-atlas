@@ -11,10 +11,12 @@
   "dependencies": {
     "@atlas/compiler": "workspace:*",
     "@atlas/cognition": "workspace:*",
+    "@atlas/frameworks": "workspace:*",
     "@atlas/kernel": "workspace:*",
     "@atlas/migration": "workspace:*",
     "@atlas/memory": "workspace:*",
     "@atlas/privacy": "workspace:*",
+    "@atlas/runtime": "workspace:*",
     "@atlas/types": "workspace:*",
     "@atlas/world-model": "workspace:*"
   }

@@ -99,6 +99,13 @@ kept as history instead of source truth.
 Useful commands:
 
 ```bash
+node packages/cli/dist/index.js memory init
+node packages/cli/dist/index.js memory add --title "Partner dashboard 403" --content "Partner user must route to /partner. Dashboard 403 is correct under least privilege."
+node packages/cli/dist/index.js memory search "dashboard 403 partner"
+node packages/cli/dist/index.js memory retrieve "fix partner dashboard permission"
+node packages/cli/dist/index.js memory lesson --task "Partner route fix" --lesson "Partner user must route through /partner."
+node packages/cli/dist/index.js memory stats
+node packages/cli/dist/index.js memory privacy-check
 node packages/cli/dist/index.js memory consolidate
 node packages/cli/dist/index.js memory decay
 node packages/cli/dist/index.js memory reinforce <id> --success true
@@ -113,6 +120,166 @@ After a task reveals reusable project knowledge, record a lesson deliberately:
 ```bash
 node packages/cli/dist/index.js task done --title "..." --summary "..." --lesson "..."
 ```
+
+The SQLite Project Operating Memory layer stores long-term project knowledge in
+`.lmti/memory/project-memory.sqlite` with FTS5 search and library zones:
+`architecture`, `codebase`, `workflow`, `deployment`, `security`, `decision`,
+`lesson`, `incident`, `customer`, `business`, `prompting` and `unknown`.
+`lmti memory add` without `--scope` writes to this SQLite layer. The older JSON
+memory commands remain available with `--scope ... --legacy`.
+
+Privacy gates run before writes and before prompt retrieval. Secret-like content
+is redacted before storage and marked `secret` or `do_not_prompt`; those records
+are not returned by `memory search` or `memory retrieve`. Internal memory is
+summarized by default in safe retrieval mode.
+
+## Short Memory Notes
+
+Short Memory is the temporary desk-notes layer inside the same SQLite store. It
+is for current-task context, checkpoints, build/test notes and unfinished
+debugging state. Notes have TTL by priority: `low` 6h, `medium` 24h, `high` 3d
+and `critical` 7d. Expired weak notes are cleaned up; only high-value notes are
+promoted into Long Memory after privacy and promotion checks.
+
+```bash
+node packages/cli/dist/index.js memory short:add --title "Current checkpoint" --content "Inspect memory retrieval next." --priority medium
+node packages/cli/dist/index.js memory short:retrieve "memory retrieval"
+node packages/cli/dist/index.js memory short:expire
+node packages/cli/dist/index.js memory short:cleanup --dry-run
+node packages/cli/dist/index.js memory short:evaluate <noteId>
+node packages/cli/dist/index.js memory short:promote <noteId> --reason "Durable lesson"
+node packages/cli/dist/index.js memory context "fix partner dashboard permission"
+```
+
+`memory context` retrieves Short Memory first for current-task constraints and
+Long Memory second for durable project knowledge. Secret and `do_not_prompt`
+notes are blocked from retrieval and promotion.
+
+## Mind Orchestrator
+
+`@atlas/runtime` now includes a Mind Orchestrator between Memory and Codex. It
+routes task intent, selects memory zones, retrieves Short and Long Memory,
+reranks by practical usefulness, filters noise, detects conflicts, applies a
+context budget and returns a compact Codex context packet.
+
+```bash
+node packages/cli/dist/index.js mind context "fix dashboard Agent loi 403"
+node packages/cli/dist/index.js mind explain "deploy production"
+node packages/cli/dist/index.js mind reflect --task "implement short memory" --summary "Added TTL notes and promotion flow"
+node packages/cli/dist/index.js mind debug "write ERP packing workflow prompt"
+```
+
+Useful npm aliases:
+
+```bash
+npm run mind:context -- "fix dashboard Agent loi 403"
+npm run mind:explain -- "deploy production"
+npm run mind:reflect -- --task "implement short memory" --summary "Added TTL notes and promotion flow"
+npm run mind:debug -- "write ERP packing workflow prompt"
+```
+
+Mind context keeps guardrails first, Short Memory for current-task constraints,
+Long Memory for durable project knowledge, and rejected-memory reasons for
+debugging. Secret and `do_not_prompt` memories remain blocked before output.
+
+## Codex Action View
+
+LMTI now has a local Codex Action View for observing AI-agent work. It records
+sessions, timeline actions, file activity, commands, decisions, memory usage,
+reflections, scope warnings, risk analysis and replay data in:
+
+```text
+.lmti/actions/codex-actions.sqlite
+```
+
+CLI:
+
+```bash
+lmti actions start --task "fix dashboard Agent 403"
+lmti actions log --session-id <id> --type file_read --file src/auth/middleware.ts
+lmti actions command --session-id <id> --command "npm test" --exit-code 0
+lmti actions decision --session-id <id> --decision "Keep least privilege" --reason "403 is expected for partner role"
+lmti actions memory --session-id <id> --memory-id <memory-id> --memory-type long --used-in-decision
+lmti actions reflection --session-id <id> --summary "Fixed route safely" --tests-run "npm test"
+lmti actions end --session-id <id> --status completed
+lmti actions list
+lmti actions show <id>
+lmti actions show <id> --html
+lmti actions replay <id>
+lmti actions replay <id> --html
+lmti actions risks
+lmti actions stats
+```
+
+Useful npm aliases:
+
+```bash
+npm run actions:list
+npm run actions:show -- <session-id>
+npm run actions:replay -- <session-id>
+npm run actions:risks
+```
+
+Action View stores summaries and metadata, not raw file content. Command output,
+diff summaries, decisions and HTML renderers are redacted before storage/output.
+Dangerous files and commands are marked high/critical risk, and sessions without
+test/build/lint verification are flagged.
+
+Recommended lifecycle:
+
+1. Start a session as soon as Codex receives a concrete task.
+2. Log file events for files read or changed, with short diff summaries only.
+3. Log build/test/lint commands with exit code and compact output summaries.
+4. Log important decisions and the memory ids that influenced them.
+5. Save a reflection before ending the session so lessons, tests and residual
+   risks remain auditable.
+
+Security boundary: Action View is local observability, not a secret vault. It
+redacts secret-like values and avoids raw file snapshots, but the SQLite file is
+currently plaintext on disk. Do not intentionally store credentials or full
+private documents in action summaries.
+
+## Universal Framework Support
+
+LMTI includes a framework-agnostic support layer in `@atlas/frameworks`. It
+detects the active stack, package manager, monorepo apps/packages, framework
+risk zones and verification plan without making the core depend on Next.js,
+Laravel, Django or any single runtime.
+
+Supported detector/adapters include:
+
+```text
+nextjs, react-vite, nestjs, express, laravel, django, fastapi,
+wordpress, dotnet, spring-boot, rails, flutter, generic
+```
+
+CLI:
+
+```bash
+lmti framework detect
+lmti framework detect --json
+lmti framework detect --html
+lmti framework list
+lmti framework info
+lmti framework commands
+lmti framework risk-zones
+lmti framework verify-plan --task "fix login middleware" --files middleware.ts
+lmti framework monorepo-map
+```
+
+Useful npm aliases:
+
+```bash
+npm run framework:detect
+npm run framework:commands
+npm run framework:verify -- --task "fix auth" --files middleware.ts
+```
+
+The detector creates `.lmti/frameworks.yml` when run through the CLI. It reads
+metadata only: filenames, lockfiles and manifests needed for detection. It does
+not read raw `.env`, `wp-config.php`, `appsettings.json`, Laravel APP_KEY,
+Django SECRET_KEY or database URLs. Framework HTML views are rendered by safe
+internal renderers for CLI/local UI integration.
 
 ## Cognitive Orchestrator
 

@@ -4,30 +4,64 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { compileProject } from "@atlas/compiler";
 import { contextPackToCognitiveItems, runCognitiveCycle } from "@atlas/cognition";
+import {
+  createFrameworkVerificationPlan,
+  createMonorepoMap,
+  detectFramework,
+  ensureFrameworkConfig,
+  formatFrameworkDetection,
+  getFrameworkAdapter,
+  listFrameworkAdapters,
+  renderFrameworkCommandsHtml,
+  renderFrameworkDetectionHtml,
+  renderFrameworkRiskZonesHtml,
+  renderFrameworkVerificationHtml,
+  renderMonorepoMapHtml
+} from "@atlas/frameworks";
 import { contextPackToBeliefs, contextPackToSensoryInputs, estimateComputeCost, runWorldModelCycle } from "@atlas/world-model";
 import {
+  addProjectMemory,
   checkMemoryPrivacy,
+  checkProjectMemoryPrivacy,
+  classifyLibraryMemory,
+  cleanupShortMemoryNotes,
   consolidateMemory,
   createMemory,
   createDefaultLmtiConfig,
+  createShortMemoryNote,
+  deleteProjectMemory,
   deleteMemory,
   decayMemoryLifecycle,
+  evaluateShortMemoryForPromotion,
   explainMemory,
+  expireShortMemoryNotes,
   getMemoryAssociations,
+  getProjectMemoryStats,
+  initProjectMemoryStorage,
   initAtlasStorage,
   listMemory,
   EXPERIMENTS_DIR,
   type InitResult,
+  type LibraryPrivacyLevel,
+  type LibraryZone,
   type LmtiConfig,
+  type ShortMemoryPriority,
+  migrateJsonMemoryToProjectMemory,
   promoteMemory,
+  promoteShortMemoryToLongMemory,
   recordTaskDone,
+  retrieveMemoryContextForTask,
   reinforceMemory,
+  retrieveMemoryForTask,
+  retrieveShortMemoryForTask,
   reviewMemory,
   readAmfDocument,
+  saveLessonAfterTask,
   fetchAllowedMemoryContent,
   retrieveMemoryMetadata,
   searchMemory,
   searchMemoryForContext,
+  searchProjectMemory,
   writeAmfDocument
 } from "@atlas/memory";
 import { buildContextPack, formatInspection, inferIntent, inspectAmf } from "@atlas/kernel";
@@ -41,6 +75,30 @@ import {
   type DoctorReport,
   type MigrationResult
 } from "@atlas/migration";
+import {
+  endCodexSession,
+  getCodexActionStats,
+  getCodexReplay,
+  getCodexSession,
+  getCodexSessionDetail,
+  listCodexRiskItems,
+  listCodexSessions,
+  logCodexAction,
+  logCodexCommandEvent,
+  logCodexDecision,
+  logCodexFileEvent,
+  logCodexMemoryUsage,
+  logCodexReflection,
+  prepareCodexContext,
+  reflectAfterTask,
+  renderCodexReplayHtml,
+  renderCodexSessionDetailHtml,
+  startCodexSession,
+  type CodexActionType,
+  type CodexFileEventType,
+  type CodexMemoryUsageType,
+  type CodexSessionStatus
+} from "@atlas/runtime";
 import {
   appendAuditEvent,
   createPrivacyContext,
@@ -140,6 +198,15 @@ export async function main(argv: string[]): Promise<void> {
       return;
     case "memory":
       await runMemory(args);
+      return;
+    case "mind":
+      await runMind(args);
+      return;
+    case "framework":
+      await runFramework(args);
+      return;
+    case "actions":
+      await runActions(args);
       return;
     case "cognition":
       await runCognition(args);
@@ -1264,6 +1331,9 @@ async function runMemory(args: string[]): Promise<void> {
   const [subcommand, ...rest] = args;
 
   switch (subcommand) {
+    case "init":
+      await runProjectMemoryInit(rest);
+      return;
     case "add":
       await runMemoryAdd(rest);
       return;
@@ -1272,6 +1342,43 @@ async function runMemory(args: string[]): Promise<void> {
       return;
     case "search":
       await runMemorySearch(rest);
+      return;
+    case "retrieve":
+      await runProjectMemoryRetrieve(rest);
+      return;
+    case "context":
+      await runMemoryContext(rest);
+      return;
+    case "short:add":
+      await runShortMemoryAdd(rest);
+      return;
+    case "short:search":
+    case "short:retrieve":
+      await runShortMemoryRetrieve(rest);
+      return;
+    case "short:expire":
+      await runShortMemoryExpire(rest);
+      return;
+    case "short:cleanup":
+      await runShortMemoryCleanup(rest);
+      return;
+    case "short:evaluate":
+      await runShortMemoryEvaluate(rest);
+      return;
+    case "short:promote":
+      await runShortMemoryPromote(rest);
+      return;
+    case "lesson":
+      await runProjectMemoryLesson(rest);
+      return;
+    case "stats":
+      await runProjectMemoryStats();
+      return;
+    case "privacy-check":
+      await runProjectMemoryPrivacyCheck();
+      return;
+    case "migrate-json":
+      await runProjectMemoryMigrateJson();
       return;
     case "consolidate":
       await runMemoryConsolidate(rest);
@@ -1298,12 +1405,17 @@ async function runMemory(args: string[]): Promise<void> {
       await runMemoryDelete(rest);
       return;
     default:
-      throw new Error("Usage: lmti memory <add|list|search|consolidate|decay|reinforce|review|associations|explain|promote|delete>");
+      throw new Error("Usage: lmti memory <init|add|list|search|retrieve|context|short:add|short:retrieve|short:expire|short:cleanup|short:evaluate|short:promote|lesson|stats|privacy-check|migrate-json|consolidate|decay|reinforce|review|associations|explain|promote|delete>");
   }
 }
 
 async function runMemoryAdd(args: string[]): Promise<void> {
   const { flags } = parseArgs(args);
+  if (!flags.legacy && !flags.scope) {
+    await runProjectMemoryAdd(args);
+    return;
+  }
+
   const title = stringFlag(flags, "title");
   const content = stringFlag(flags, "content");
 
@@ -1348,7 +1460,18 @@ async function runMemorySearch(args: string[]): Promise<void> {
   const { positional, flags } = parseArgs(args);
   const query = positional[0];
   if (!query) {
-    throw new Error('Usage: lmti memory search "<query>" [--include-secret]');
+    throw new Error('Usage: lmti memory search "<query>" [--legacy] [--zone deployment,security]');
+  }
+
+  if (!flags.legacy) {
+    const results = await searchProjectMemory(query, {
+      cwd: process.cwd(),
+      zones: parseLibraryZones(stringFlag(flags, "zone") ?? stringFlag(flags, "zones")),
+      privacyMode: parsePrivacyMode(stringFlag(flags, "privacy-mode")),
+      limit: parseNumberFlag(flags, "limit", 10)
+    });
+    printSafeJson(results, "memory search");
+    return;
   }
 
   const results = await searchMemory(query, {
@@ -1363,6 +1486,204 @@ async function runMemorySearch(args: string[]): Promise<void> {
     console.warn("[LMTI] Sensitive memory search requested. Policy enforcement applied.");
   }
   printSafeJson(results, "memory search");
+}
+
+async function runProjectMemoryInit(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const storage = await initProjectMemoryStorage(process.cwd());
+  const migration = flags["migrate-json"] ? await migrateJsonMemoryToProjectMemory({ cwd: process.cwd() }) : undefined;
+  printSafeJson({ ...storage, migration }, "memory init");
+}
+
+async function runProjectMemoryAdd(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const title = stringFlag(flags, "title");
+  const content = stringFlag(flags, "content");
+  if (!content) {
+    throw new Error('Usage: lmti memory add --title "..." --content "..." [--zone lesson] [--privacy-level internal]');
+  }
+
+  const memory = await (async () => {
+    const classification = classifyLibraryMemory({
+      title,
+      content,
+      source: stringFlag(flags, "source"),
+      sourceType: stringFlag(flags, "source-type"),
+      tags: parseCsv(stringFlag(flags, "tags"))
+    });
+    return {
+      classification,
+      item: await addProjectMemory(
+        {
+          title,
+          content,
+          source: stringFlag(flags, "source"),
+          sourceType: stringFlag(flags, "source-type"),
+          tags: parseCsv(stringFlag(flags, "tags")),
+          zone: optionalLibraryZone(stringFlag(flags, "zone")),
+          privacyLevel: optionalLibraryPrivacyLevel(stringFlag(flags, "privacy-level")),
+          confidence: flags.confidence === undefined ? undefined : parseNumberFlag(flags, "confidence", classification.confidence),
+          importance: flags.importance === undefined ? undefined : parseNumberFlag(flags, "importance", classification.importance),
+          expiresAt: stringFlag(flags, "expires-at")
+        },
+        { cwd: process.cwd() }
+      )
+    };
+  })();
+  printSafeJson(memory, "memory add");
+}
+
+async function runProjectMemoryRetrieve(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const task = positional[0];
+  if (!task) {
+    throw new Error('Usage: lmti memory retrieve "<task>" [--zone deployment,security] [--limit 8]');
+  }
+
+  const results = await retrieveMemoryForTask(task, {
+    cwd: process.cwd(),
+    zones: parseLibraryZones(stringFlag(flags, "zone") ?? stringFlag(flags, "zones")),
+    privacyMode: parsePrivacyMode(stringFlag(flags, "privacy-mode")),
+    limit: parseNumberFlag(flags, "limit", 8)
+  });
+  printSafeJson(results, "memory retrieve");
+}
+
+async function runProjectMemoryLesson(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const task = stringFlag(flags, "task");
+  const lesson = stringFlag(flags, "lesson");
+  if (!task || !lesson) {
+    throw new Error('Usage: lmti memory lesson --task "..." --lesson "..." [--what-changed "..."] [--fix-applied "..."]');
+  }
+
+  const result = await saveLessonAfterTask(
+    {
+      task,
+      lesson,
+      whatChanged: stringFlag(flags, "what-changed"),
+      bugFound: stringFlag(flags, "bug-found"),
+      fixApplied: stringFlag(flags, "fix-applied"),
+      filesTouched: parseCsv(stringFlag(flags, "files-touched")),
+      risk: stringFlag(flags, "risk")
+    },
+    { cwd: process.cwd() }
+  );
+  printSafeJson(result, "memory lesson");
+}
+
+async function runProjectMemoryStats(): Promise<void> {
+  printSafeJson(await getProjectMemoryStats({ cwd: process.cwd() }), "memory stats");
+}
+
+async function runProjectMemoryPrivacyCheck(): Promise<void> {
+  printSafeJson(await checkProjectMemoryPrivacy({ cwd: process.cwd() }), "memory privacy-check");
+}
+
+async function runProjectMemoryMigrateJson(): Promise<void> {
+  printSafeJson(await migrateJsonMemoryToProjectMemory({ cwd: process.cwd() }), "memory migrate-json");
+}
+
+async function runShortMemoryAdd(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const title = stringFlag(flags, "title");
+  const content = stringFlag(flags, "content");
+  if (!title || !content) {
+    throw new Error('Usage: lmti memory short:add --title "..." --content "..." [--priority high] [--ttl-hours 72]');
+  }
+
+  const note = await createShortMemoryNote(
+    {
+      title,
+      content,
+      source: stringFlag(flags, "source"),
+      sourceType: stringFlag(flags, "source-type"),
+      tags: parseCsv(stringFlag(flags, "tags")),
+      priority: parseShortMemoryPriority(stringFlag(flags, "priority") ?? "medium"),
+      ttl: parseShortMemoryTtl(flags)
+    },
+    { cwd: process.cwd() }
+  );
+  printSafeJson(note, "memory short:add");
+}
+
+async function runShortMemoryRetrieve(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const task = positional[0];
+  if (!task) {
+    throw new Error('Usage: lmti memory short:retrieve "<task>" [--limit 8] [--tags a,b]');
+  }
+
+  const result = await retrieveShortMemoryForTask(task, {
+    cwd: process.cwd(),
+    limit: parseNumberFlag(flags, "limit", 8),
+    tags: parseCsv(stringFlag(flags, "tags")),
+    includeExpired: Boolean(flags["include-expired"]),
+    privacyMode: parsePrivacyMode(stringFlag(flags, "privacy-mode"))
+  });
+  printSafeJson(result, "memory short:retrieve");
+}
+
+async function runShortMemoryExpire(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const result = await expireShortMemoryNotes({
+    cwd: process.cwd(),
+    now: parseNowFlag(flags)
+  });
+  printSafeJson(result, "memory short:expire");
+}
+
+async function runShortMemoryCleanup(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const result = await cleanupShortMemoryNotes({
+    cwd: process.cwd(),
+    now: parseNowFlag(flags),
+    deleteExpiredOlderThanHours: parseNumberFlag(flags, "delete-expired-older-than-hours", 24),
+    dryRun: Boolean(flags["dry-run"])
+  });
+  printSafeJson(result, "memory short:cleanup");
+}
+
+async function runShortMemoryEvaluate(args: string[]): Promise<void> {
+  const { flags, positional } = parseArgs(args);
+  const noteId = stringFlag(flags, "note-id") ?? positional[0];
+  if (!noteId) {
+    throw new Error('Usage: lmti memory short:evaluate --note-id "..."');
+  }
+  printSafeJson(await evaluateShortMemoryForPromotion(noteId, { cwd: process.cwd() }), "memory short:evaluate");
+}
+
+async function runShortMemoryPromote(args: string[]): Promise<void> {
+  const { flags, positional } = parseArgs(args);
+  const noteId = stringFlag(flags, "note-id") ?? positional[0];
+  if (!noteId) {
+    throw new Error('Usage: lmti memory short:promote --note-id "..." [--reason "..."] [--force]');
+  }
+  const result = await promoteShortMemoryToLongMemory(
+    {
+      noteId,
+      reason: stringFlag(flags, "reason"),
+      force: Boolean(flags.force)
+    },
+    { cwd: process.cwd() }
+  );
+  printSafeJson(result, "memory short:promote");
+}
+
+async function runMemoryContext(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const task = positional[0];
+  if (!task) {
+    throw new Error('Usage: lmti memory context "<task>" [--short-limit 8] [--long-limit 8]');
+  }
+  const result = await retrieveMemoryContextForTask(task, {
+    cwd: process.cwd(),
+    shortLimit: parseNumberFlag(flags, "short-limit", 8),
+    longLimit: parseNumberFlag(flags, "long-limit", 8),
+    privacyMode: parsePrivacyMode(stringFlag(flags, "privacy-mode")),
+    now: parseNowFlag(flags)
+  });
+  printSafeJson(result, "memory context");
 }
 
 async function runMemoryConsolidate(args: string[]): Promise<void> {
@@ -1457,6 +1778,435 @@ async function runMemoryDelete(args: string[]): Promise<void> {
   }
   const deleted = await deleteMemory(id, { cwd: process.cwd() });
   printSafeJson({ id, deleted }, "memory delete");
+}
+
+async function runMind(args: string[]): Promise<void> {
+  const [subcommand, ...rest] = args;
+  switch (subcommand) {
+    case "context":
+      printSafeJson(await mindContextCommand(process.cwd(), rest, false), "mind context");
+      return;
+    case "explain":
+    case "debug":
+      printSafeJson(await mindContextCommand(process.cwd(), rest, true), `mind ${subcommand}`);
+      return;
+    case "reflect":
+      printSafeJson(await mindReflectCommand(process.cwd(), rest), "mind reflect");
+      return;
+    default:
+      throw new Error('Usage: lmti mind <context|explain|reflect|debug> "<task>"');
+  }
+}
+
+export async function mindContextCommand(cwd: string, args: string[], includeReasoning = false) {
+  const { positional, flags } = parseArgs(args);
+  const task = positional[0] ?? stringFlag(flags, "task");
+  if (!task) {
+    throw new Error('Usage: lmti mind context "<task>" [--max-context-chars 6000]');
+  }
+  return prepareCodexContext({
+    task,
+    cwd,
+    userIntent: stringFlag(flags, "intent"),
+    repoState: {
+      branch: stringFlag(flags, "branch"),
+      dirtyFiles: parseCsv(stringFlag(flags, "dirty-files")),
+      recentFiles: parseCsv(stringFlag(flags, "recent-files")),
+      packageManager: stringFlag(flags, "package-manager"),
+      framework: stringFlag(flags, "framework")
+    },
+    options: {
+      maxShortNotes: parseNumberFlag(flags, "max-short-notes", 5),
+      maxLongMemories: parseNumberFlag(flags, "max-long-memories", 7),
+      maxContextChars: parseNumberFlag(flags, "max-context-chars", 6000),
+      privacyMode: parsePrivacyMode(stringFlag(flags, "privacy-mode")),
+      includeReasoning: includeReasoning || Boolean(flags["include-reasoning"])
+    }
+  });
+}
+
+export async function mindReflectCommand(cwd: string, args: string[]) {
+  const { flags } = parseArgs(args);
+  const task = stringFlag(flags, "task");
+  if (!task) {
+    throw new Error('Usage: lmti mind reflect --task "..." [--summary "..."]');
+  }
+  return reflectAfterTask({
+    task,
+    cwd,
+    filesChanged: parseCsv(stringFlag(flags, "files-changed")),
+    summary: stringFlag(flags, "summary"),
+    bugsFound: parseCsv(stringFlag(flags, "bugs-found")),
+    decisionsMade: parseCsv(stringFlag(flags, "decisions-made")),
+    testsRun: parseCsv(stringFlag(flags, "tests-run")),
+    risks: parseCsv(stringFlag(flags, "risks"))
+  });
+}
+
+async function runFramework(args: string[]): Promise<void> {
+  const [subcommand, ...rest] = args;
+  switch (subcommand) {
+    case "detect":
+      await runFrameworkDetect(rest);
+      return;
+    case "list":
+      printSafeJson(listFrameworkAdapters().map((adapter) => ({ name: adapter.name, language: adapter.language })), "framework list");
+      return;
+    case "info":
+      await runFrameworkInfo(rest);
+      return;
+    case "commands":
+      await runFrameworkCommands(rest);
+      return;
+    case "risk-zones":
+      await runFrameworkRiskZones(rest);
+      return;
+    case "verify-plan":
+      await runFrameworkVerifyPlan(rest);
+      return;
+    case "monorepo-map":
+      await runFrameworkMonorepoMap(rest);
+      return;
+    default:
+      throw new Error('Usage: lmti framework <detect|list|info|commands|risk-zones|verify-plan|monorepo-map>');
+  }
+}
+
+export async function frameworkDetectCommand(cwd: string) {
+  await ensureFrameworkConfig(cwd);
+  return detectFramework({ repoRoot: cwd });
+}
+
+async function runFrameworkDetect(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const result = await frameworkDetectCommand(process.cwd());
+  if (flags.html) {
+    printSafeText(renderFrameworkDetectionHtml(result));
+    return;
+  }
+  if (flags.json) {
+    printSafeJson(result, "framework detect");
+    return;
+  }
+  printSafeText(formatFrameworkDetection(result));
+}
+
+async function runFrameworkInfo(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const detection = await detectFramework({ repoRoot: process.cwd() });
+  const name = positional[0] ?? stringFlag(flags, "framework") ?? detection.primaryFramework;
+  const adapter = getFrameworkAdapter(name);
+  if (!adapter) {
+    throw new Error(`Unknown framework adapter: ${name}`);
+  }
+  printSafeJson({
+    name: adapter.name,
+    language: adapter.language,
+    active: adapter.name === detection.primaryFramework,
+    detected: detection.primaryFramework,
+    confidence: detection.confidence
+  }, "framework info");
+}
+
+async function runFrameworkCommands(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const detection = await detectFramework({ repoRoot: process.cwd() });
+  const name = positional[0] ?? stringFlag(flags, "framework") ?? detection.primaryFramework;
+  const adapter = getFrameworkAdapter(name) ?? getFrameworkAdapter("generic");
+  if (!adapter) {
+    throw new Error(`Unknown framework adapter: ${name}`);
+  }
+  const commands = await adapter.getDefaultCommands(process.cwd());
+  if (flags.html) {
+    printSafeText(renderFrameworkCommandsHtml({ framework: adapter.name, commands }));
+    return;
+  }
+  printSafeJson({ framework: adapter.name, commands }, "framework commands");
+}
+
+async function runFrameworkRiskZones(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const detection = await detectFramework({ repoRoot: process.cwd() });
+  const name = positional[0] ?? stringFlag(flags, "framework") ?? detection.primaryFramework;
+  const adapter = getFrameworkAdapter(name) ?? getFrameworkAdapter("generic");
+  if (!adapter) {
+    throw new Error(`Unknown framework adapter: ${name}`);
+  }
+  const zones = await adapter.getRiskZones(process.cwd());
+  if (flags.html) {
+    printSafeText(renderFrameworkRiskZonesHtml({ framework: adapter.name, zones }));
+    return;
+  }
+  printSafeJson({ framework: adapter.name, zones }, "framework risk-zones");
+}
+
+async function runFrameworkVerifyPlan(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const task = stringFlag(flags, "task");
+  if (!task) {
+    throw new Error('Usage: lmti framework verify-plan --task "..." [--files "a,b"]');
+  }
+  const detection = await detectFramework({ repoRoot: process.cwd() });
+  const plan = await createFrameworkVerificationPlan({
+    framework: stringFlag(flags, "framework") ?? detection.primaryFramework,
+    task,
+    filesChanged: parseCsv(stringFlag(flags, "files")),
+    riskLevel: stringFlag(flags, "risk-level") ?? "medium",
+    repoRoot: process.cwd()
+  });
+  if (flags.html) {
+    printSafeText(renderFrameworkVerificationHtml(plan));
+    return;
+  }
+  printSafeJson(plan, "framework verify-plan");
+}
+
+async function runFrameworkMonorepoMap(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const map = await createMonorepoMap({ repoRoot: process.cwd() });
+  if (flags.html) {
+    printSafeText(renderMonorepoMapHtml(map));
+    return;
+  }
+  printSafeJson(map, "framework monorepo-map");
+}
+
+async function runActions(args: string[]): Promise<void> {
+  const [subcommand, ...rest] = args;
+  switch (subcommand) {
+    case "start":
+      await runActionsStart(rest);
+      return;
+    case "log":
+      await runActionsLog(rest);
+      return;
+    case "command":
+      await runActionsCommand(rest);
+      return;
+    case "decision":
+      await runActionsDecision(rest);
+      return;
+    case "memory":
+      await runActionsMemory(rest);
+      return;
+    case "reflection":
+      await runActionsReflection(rest);
+      return;
+    case "end":
+      await runActionsEnd(rest);
+      return;
+    case "list":
+      await runActionsList(rest);
+      return;
+    case "show":
+      await runActionsShow(rest);
+      return;
+    case "risks":
+      await runActionsRisks(rest);
+      return;
+    case "replay":
+      await runActionsReplay(rest);
+      return;
+    case "stats":
+      printSafeJson(await getCodexActionStats({ cwd: process.cwd() }), "actions stats");
+      return;
+    default:
+      throw new Error('Usage: lmti actions <start|log|command|decision|memory|reflection|end|list|show|risks|replay|stats>');
+  }
+}
+
+async function runActionsStart(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const task = stringFlag(flags, "task");
+  if (!task) {
+    throw new Error('Usage: lmti actions start --task "..."');
+  }
+  printSafeJson(
+    await startCodexSession({
+      cwd: process.cwd(),
+      task,
+      branch: stringFlag(flags, "branch"),
+      intent: stringFlag(flags, "intent")
+    }),
+    "actions start"
+  );
+}
+
+async function runActionsLog(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const sessionId = requiredStringFlag(flags, "session-id", "Usage: lmti actions log --session-id <id> --type file_read --file <path>");
+  const type = parseCodexActionType(stringFlag(flags, "type") ?? "decision_made");
+  const file = stringFlag(flags, "file");
+  const title = stringFlag(flags, "title") ?? type;
+
+  if (file && type.startsWith("file_")) {
+    const eventType = actionTypeToFileEvent(type);
+    printSafeJson(
+      await logCodexFileEvent({
+        cwd: process.cwd(),
+        sessionId,
+        filePath: file,
+        eventType,
+        diffSummary: stringFlag(flags, "diff-summary"),
+        linesAdded: parseNumberFlag(flags, "lines-added", 0),
+        linesRemoved: parseNumberFlag(flags, "lines-removed", 0)
+      }),
+      "actions log"
+    );
+    return;
+  }
+
+  printSafeJson(
+    await logCodexAction({
+      cwd: process.cwd(),
+      sessionId,
+      actionType: type,
+      title,
+      detail: stringFlag(flags, "detail"),
+      filePath: file,
+      command: stringFlag(flags, "command")
+    }),
+    "actions log"
+  );
+}
+
+async function runActionsCommand(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const sessionId = requiredStringFlag(flags, "session-id", "Usage: lmti actions command --session-id <id> --command \"npm test\" --exit-code 0");
+  const command = requiredStringFlag(flags, "command", "Usage: lmti actions command --session-id <id> --command \"npm test\" --exit-code 0");
+  printSafeJson(
+    await logCodexCommandEvent({
+      cwd: process.cwd(),
+      sessionId,
+      command,
+      commandCwd: stringFlag(flags, "cwd"),
+      exitCode: flags["exit-code"] === undefined ? undefined : parseNumberFlag(flags, "exit-code", 0),
+      durationMs: flags["duration-ms"] === undefined ? undefined : parseNumberFlag(flags, "duration-ms", 0),
+      outputSummary: stringFlag(flags, "output-summary"),
+      errorSummary: stringFlag(flags, "error-summary")
+    }),
+    "actions command"
+  );
+}
+
+async function runActionsDecision(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const sessionId = requiredStringFlag(flags, "session-id", "Usage: lmti actions decision --session-id <id> --decision \"...\" --reason \"...\"");
+  const decision = requiredStringFlag(flags, "decision", "Usage: lmti actions decision --session-id <id> --decision \"...\" --reason \"...\"");
+  printSafeJson(
+    await logCodexDecision({
+      cwd: process.cwd(),
+      sessionId,
+      decision,
+      reason: stringFlag(flags, "reason"),
+      alternatives: parseCsv(stringFlag(flags, "alternatives")),
+      relatedFiles: parseCsv(stringFlag(flags, "related-files")),
+      relatedMemoryIds: parseCsv(stringFlag(flags, "related-memory-ids")),
+      confidence: parseNumberFlag(flags, "confidence", 0.5)
+    }),
+    "actions decision"
+  );
+}
+
+async function runActionsMemory(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const sessionId = requiredStringFlag(flags, "session-id", "Usage: lmti actions memory --session-id <id> --memory-id <id> --memory-type long");
+  const memoryId = requiredStringFlag(flags, "memory-id", "Usage: lmti actions memory --session-id <id> --memory-id <id> --memory-type long");
+  printSafeJson(
+    await logCodexMemoryUsage({
+      cwd: process.cwd(),
+      sessionId,
+      memoryId,
+      memoryType: parseCodexMemoryType(stringFlag(flags, "memory-type") ?? "long"),
+      role: stringFlag(flags, "role"),
+      reason: stringFlag(flags, "reason"),
+      usedInDecision: Boolean(flags["used-in-decision"])
+    }),
+    "actions memory"
+  );
+}
+
+async function runActionsReflection(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const sessionId = requiredStringFlag(flags, "session-id", "Usage: lmti actions reflection --session-id <id> --summary \"...\"");
+  printSafeJson(
+    await logCodexReflection({
+      cwd: process.cwd(),
+      sessionId,
+      taskSummary: stringFlag(flags, "summary"),
+      filesChanged: parseCsv(stringFlag(flags, "files-changed")),
+      testsRun: parseCsv(stringFlag(flags, "tests-run")),
+      bugsFound: parseCsv(stringFlag(flags, "bugs-found")),
+      lessonsCreated: parseCsv(stringFlag(flags, "lessons-created")),
+      shortNotesCreated: parseCsv(stringFlag(flags, "short-notes-created")),
+      longMemoriesCreated: parseCsv(stringFlag(flags, "long-memories-created")),
+      risksRemaining: parseCsv(stringFlag(flags, "risks-remaining"))
+    }),
+    "actions reflection"
+  );
+}
+
+async function runActionsEnd(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const sessionId = requiredStringFlag(flags, "session-id", "Usage: lmti actions end --session-id <id> --status completed");
+  printSafeJson(
+    await endCodexSession({
+      cwd: process.cwd(),
+      sessionId,
+      status: parseCodexSessionStatus(stringFlag(flags, "status") ?? "completed"),
+      summary: stringFlag(flags, "summary")
+    }),
+    "actions end"
+  );
+}
+
+async function runActionsList(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  printSafeJson(
+    await listCodexSessions({
+      cwd: process.cwd(),
+      status: stringFlag(flags, "status") ? parseCodexSessionStatus(stringFlag(flags, "status") ?? "running") : undefined,
+      limit: parseNumberFlag(flags, "limit", 50)
+    }),
+    "actions list"
+  );
+}
+
+async function runActionsShow(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const sessionId = positional[0] ?? stringFlag(flags, "session-id");
+  if (!sessionId) {
+    throw new Error("Usage: lmti actions show <session-id>");
+  }
+  const detail = await getCodexSessionDetail(sessionId, { cwd: process.cwd() });
+  if (flags.html) {
+    printSafeText(renderCodexSessionDetailHtml(detail));
+    return;
+  }
+  printSafeJson(detail, "actions show");
+}
+
+async function runActionsRisks(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  printSafeJson(await listCodexRiskItems({ cwd: process.cwd(), limit: parseNumberFlag(flags, "limit", 50) }), "actions risks");
+}
+
+async function runActionsReplay(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const sessionId = positional[0] ?? stringFlag(flags, "session-id");
+  if (!sessionId) {
+    throw new Error("Usage: lmti actions replay <session-id>");
+  }
+  const replay = await getCodexReplay(sessionId, { cwd: process.cwd() });
+  if (flags.html) {
+    const session = await getCodexSession(sessionId, { cwd: process.cwd() });
+    if (!session) {
+      throw new Error(`Codex session not found: ${sessionId}`);
+    }
+    printSafeText(renderCodexReplayHtml({ session, replay }));
+    return;
+  }
+  printSafeJson(replay, "actions replay");
 }
 
 async function runCognition(args: string[]): Promise<void> {
@@ -1904,6 +2654,14 @@ function printSafeJson(value: unknown, label: string): void {
   console.log(redactText(serialized));
 }
 
+function printSafeText(value: string): void {
+  const scan = runEgressSecretScan(value);
+  if (scan.blocked) {
+    console.warn("[LMTI] text output matched secret patterns and was redacted before printing.");
+  }
+  console.log(redactText(value));
+}
+
 function printHelp(): void {
   console.log(`LMTI - Atlas
 
@@ -1917,9 +2675,23 @@ Usage:
   lmti preflight "<task>" [amfPath] [--role developer] [--model-target external_model]
   lmti experiment thinking "<task>"
   lmti attach codex
-  lmti memory add --scope short_term --kind task --title "..." --content "..."
+  lmti memory init [--migrate-json]
+  lmti memory add --title "..." --content "..." [--zone lesson]
+  lmti memory add --scope short_term --kind task --title "..." --content "..." --legacy
   lmti memory list [--scope short_term|long_term] [--role developer]
-  lmti memory search "<query>" [--role agent] [--include-secret]
+  lmti memory search "<query>" [--zone security,lesson]
+  lmti memory search "<query>" --legacy [--role agent] [--include-secret]
+  lmti memory retrieve "<task>"
+  lmti memory context "<task>" [--short-limit 8] [--long-limit 8]
+  lmti memory short:add --title "..." --content "..." [--priority medium] [--ttl-hours 24]
+  lmti memory short:retrieve "<task>" [--tags tag-a,tag-b]
+  lmti memory short:expire
+  lmti memory short:cleanup [--dry-run]
+  lmti memory short:evaluate <noteId>
+  lmti memory short:promote <noteId> [--reason "..."]
+  lmti memory lesson --task "..." --lesson "..."
+  lmti memory stats
+  lmti memory privacy-check
   lmti memory consolidate
   lmti memory decay
   lmti memory reinforce <id> --success true|false
@@ -1928,6 +2700,26 @@ Usage:
   lmti memory explain "<query>"
   lmti memory promote <id>
   lmti memory delete <id>
+  lmti mind context "<task>"
+  lmti mind explain "<task>"
+  lmti mind reflect --task "..." [--summary "..."]
+  lmti mind debug "<task>"
+  lmti framework detect [--json|--html]
+  lmti framework list
+  lmti framework info [framework]
+  lmti framework commands [framework]
+  lmti framework risk-zones [framework]
+  lmti framework verify-plan --task "..." [--files a,b]
+  lmti framework monorepo-map
+  lmti actions start --task "..."
+  lmti actions log --session-id "..." --type file_read --file "..."
+  lmti actions command --session-id "..." --command "npm test" --exit-code 0
+  lmti actions decision --session-id "..." --decision "..." --reason "..."
+  lmti actions end --session-id "..." --status completed
+  lmti actions list
+  lmti actions show <session-id>
+  lmti actions risks
+  lmti actions replay <session-id>
   lmti cognition run "<task>"
   lmti cognition explain "<task>"
   lmti cognition state ["<task>"]
@@ -1952,6 +2744,9 @@ Commands:
   experiment Run local LMTI experiments.
   attach    Attach local LMTI guidance to Codex.
   memory    Manage local structured ATLAS memory.
+  mind      Prepare intent-aware, privacy-safe Codex context from memory.
+  framework Detect project frameworks, commands, risk zones and verification.
+  actions   Track, audit and replay Codex/AI Agent actions.
   cognition Run the deterministic Cognitive Orchestrator.
   world     Run Reality Boundary and resource-bounded active inference checks.
   remember  Store a deliberate project lesson, rule or decision.
@@ -1990,6 +2785,14 @@ function parseArgs(args: string[]): { positional: string[]; flags: Record<string
 function stringFlag(flags: Record<string, FlagValue>, key: string): string | undefined {
   const value = flags[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function requiredStringFlag(flags: Record<string, FlagValue>, key: string, usage: string): string {
+  const value = stringFlag(flags, key);
+  if (!value) {
+    throw new Error(usage);
+  }
+  return value;
 }
 
 function parseScope(value: string): MemoryScope {
@@ -2054,6 +2857,143 @@ function parsePromptPolicy(value: string): PromptPolicy {
   throw new Error(`Invalid prompt policy: ${value}`);
 }
 
+function optionalLibraryZone(value?: string): LibraryZone | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const allowed = new Set<LibraryZone>([
+    "architecture",
+    "codebase",
+    "workflow",
+    "deployment",
+    "security",
+    "decision",
+    "lesson",
+    "incident",
+    "customer",
+    "business",
+    "prompting",
+    "unknown"
+  ]);
+  if (allowed.has(value as LibraryZone)) {
+    return value as LibraryZone;
+  }
+  throw new Error(`Invalid library memory zone: ${value}`);
+}
+
+function parseLibraryZones(value?: string): LibraryZone[] | undefined {
+  const zones = parseCsv(value).map((zone) => optionalLibraryZone(zone)).filter((zone): zone is LibraryZone => Boolean(zone));
+  return zones.length > 0 ? zones : undefined;
+}
+
+function optionalLibraryPrivacyLevel(value?: string): LibraryPrivacyLevel | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const allowed = new Set<LibraryPrivacyLevel>(["public", "internal", "private", "secret", "do_not_prompt"]);
+  if (allowed.has(value as LibraryPrivacyLevel)) {
+    return value as LibraryPrivacyLevel;
+  }
+  throw new Error(`Invalid library privacy level: ${value}`);
+}
+
+function parsePrivacyMode(value?: string): "safe" | "internal" {
+  if (!value || value === "safe") {
+    return "safe";
+  }
+  if (value === "internal") {
+    return "internal";
+  }
+  throw new Error(`Invalid privacy mode: ${value}`);
+}
+
+function parseCodexActionType(value: string): CodexActionType {
+  const allowed = new Set<CodexActionType>([
+    "task_received",
+    "intent_detected",
+    "memory_context_loaded",
+    "file_read",
+    "file_modified",
+    "file_created",
+    "file_deleted",
+    "file_renamed",
+    "command_run",
+    "test_run",
+    "build_run",
+    "lint_run",
+    "error_detected",
+    "decision_made",
+    "scope_warning",
+    "privacy_warning",
+    "risk_warning",
+    "rollback_suggested",
+    "task_completed",
+    "reflection_saved"
+  ]);
+  if (allowed.has(value as CodexActionType)) {
+    return value as CodexActionType;
+  }
+  throw new Error(`Invalid codex action type: ${value}`);
+}
+
+function actionTypeToFileEvent(type: CodexActionType): CodexFileEventType {
+  switch (type) {
+    case "file_read":
+      return "read";
+    case "file_created":
+      return "created";
+    case "file_deleted":
+      return "deleted";
+    case "file_renamed":
+      return "renamed";
+    case "file_modified":
+    default:
+      return "modified";
+  }
+}
+
+function parseCodexSessionStatus(value: string): CodexSessionStatus {
+  const allowed = new Set<CodexSessionStatus>(["running", "completed", "failed", "blocked", "rolled_back", "needs_review"]);
+  if (allowed.has(value as CodexSessionStatus)) {
+    return value as CodexSessionStatus;
+  }
+  throw new Error(`Invalid codex session status: ${value}`);
+}
+
+function parseCodexMemoryType(value: string): CodexMemoryUsageType {
+  const allowed = new Set<CodexMemoryUsageType>(["short", "long", "guardrail", "task_hint"]);
+  if (allowed.has(value as CodexMemoryUsageType)) {
+    return value as CodexMemoryUsageType;
+  }
+  throw new Error(`Invalid codex memory type: ${value}`);
+}
+
+function parseShortMemoryPriority(value: string): ShortMemoryPriority {
+  if (value === "low" || value === "medium" || value === "high" || value === "critical") {
+    return value;
+  }
+  throw new Error(`Invalid short memory priority: ${value}`);
+}
+
+function parseShortMemoryTtl(flags: Record<string, FlagValue>): { minutes?: number; hours?: number; days?: number } | undefined {
+  const minutes = optionalNumberFlag(flags, "ttl-minutes");
+  const hours = optionalNumberFlag(flags, "ttl-hours");
+  const days = optionalNumberFlag(flags, "ttl-days");
+  return minutes === undefined && hours === undefined && days === undefined ? undefined : { minutes, hours, days };
+}
+
+function parseNowFlag(flags: Record<string, FlagValue>): Date | undefined {
+  const value = stringFlag(flags, "now");
+  if (!value) {
+    return undefined;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Invalid ISO date for --now: ${value}`);
+  }
+  return parsed;
+}
+
 function parseConfidence(value: string): "low" | "medium" | "high" {
   if (value === "low" || value === "medium" || value === "high") {
     return value;
@@ -2077,6 +3017,18 @@ function parseNumberFlag(flags: Record<string, FlagValue>, key: string, fallback
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function optionalNumberFlag(flags: Record<string, FlagValue>, key: string): number | undefined {
+  const value = stringFlag(flags, key);
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid number for --${key}: ${value}`);
+  }
+  return parsed;
 }
 
 function parseBooleanFlag(flags: Record<string, FlagValue>, key: string, fallback = true): boolean {
