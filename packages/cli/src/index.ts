@@ -2580,13 +2580,19 @@ Before making changes, Codex should:
 5. Never expose secret memory or confidential project knowledge in raw form.
 6. After completing a task, summarize what changed and suggest what should be stored as long-term memory.
 7. If a task reveals a reusable rule, bug, route, deploy note, permission rule or architecture constraint, prefer \`lmti task done --lesson "..."\` or \`lmti memory consolidate\` over storing raw chat.
+8. Treat memory as prior belief, not reality. Source code, tests, tool output and explicit user instruction are observations.
+9. Use framework detection before planning build/test/risk steps on unfamiliar projects.
+10. Do not bypass LMTI privacy gates, do not widen permissions to make a task pass, and never print secrets.
 
 Suggested local command:
 
 lmti context "<task>"
+lmti mind context "<task>"
+lmti framework detect
 lmti preflight "<task>" --role developer --model-target external_model
 lmti memory explain "<task>"
 lmti memory review
+lmti world check "<task>"
 lmti benchmark preflight "<task>" --runs 5
 ${LMTI_SECTION_END}`;
 
