@@ -1,21 +1,25 @@
-{
-  "name": "lmti-atlas",
-  "version": "0.1.0-alpha.1",
-  "private": true,
-  "license": "Apache-2.0",
-  "packageManager": "pnpm@10.13.1",
-  "description": "A local-first project mind layer for AI coding agents.",
-  "scripts": {
-    "build": "tsc -b packages/types packages/graph packages/privacy packages/migration packages/memory packages/security packages/tools packages/agents packages/context packages/compiler packages/kernel packages/cognition packages/world-model packages/runtime packages/cli",
-    "clean": "tsc -b --clean packages/types packages/graph packages/privacy packages/migration packages/memory packages/security packages/tools packages/agents packages/context packages/compiler packages/kernel packages/cognition packages/world-model packages/runtime packages/cli",
-    "test": "vitest run --dir packages"
-  },
-  "devDependencies": {
-    "@types/node": "^22.13.14",
-    "typescript": "^5.8.3",
-    "vitest": "^3.2.4"
-  },
-  "engines": {
-    "node": ">=20.0.0"
-  }
+﻿{
+    "name":  "lmti-atlas",
+    "version":  "0.1.0-alpha.1",
+    "private":  true,
+    "license":  "Apache-2.0",
+    "packageManager":  "pnpm@10.13.1",
+    "description":  "LMTI monorepo: local-first project memory, context routing, privacy, verification, and lesson capture for AI coding agents. @atlas/* is an internal local-alpha namespace.",
+    "scripts":  {
+                    "build":  "tsc -b packages/types packages/graph packages/privacy packages/migration packages/memory packages/security packages/tools packages/agents packages/context packages/compiler packages/kernel packages/cognition packages/world-model packages/runtime packages/cli",
+                    "clean":  "tsc -b --clean packages/types packages/graph packages/privacy packages/migration packages/memory packages/security packages/tools packages/agents packages/context packages/compiler packages/kernel packages/cognition packages/world-model packages/runtime packages/cli",
+                    "test":  "vitest run --dir packages"
+                },
+    "devDependencies":  {
+                            "@types/node":  "^22.13.14",
+                            "typescript":  "^5.8.3",
+                            "vitest":  "^3.2.4"
+                        },
+    "engines":  {
+                    "node":  "\u003e=20.0.0"
+                },
+    "repository":  {
+                       "type":  "git",
+                       "url":  "https://github.com/vuthuanphat6-byte/lmti-atlas.git"
+                   }
 }

@@ -1,6 +1,6 @@
 ﻿# Security Model
 
-LMTI-Atlas is security-first, privacy-first and local-first.
+LMTI is security-first, privacy-first and local-first.
 
 Core rules:
 

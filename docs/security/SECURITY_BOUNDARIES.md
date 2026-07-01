@@ -1,6 +1,8 @@
-# Security Boundaries
+﻿# Security Boundaries
 
 Date: 2026-06-29
+
+Naming note: `@atlas/*` package names are internal Local Alpha implementation namespaces for LMTI. They are not a separate product identity.
 
 | Package | Boundary |
 | --- | --- |
@@ -23,4 +25,3 @@ Date: 2026-06-29
 - Denied by default: `write`, `network`, `filesystem`, `database`, `admin`
 
 Dangerous tools must provide a clear denial reason and audit event.
-

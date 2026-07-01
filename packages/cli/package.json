@@ -1,21 +1,27 @@
-{
-  "name": "lmti",
-  "version": "0.0.0",
-  "private": false,
-  "bin": {
-    "lmti": "dist/index.js",
-    "atlas": "dist/index.js"
-  },
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "dependencies": {
-    "@atlas/compiler": "workspace:*",
-    "@atlas/cognition": "workspace:*",
-    "@atlas/kernel": "workspace:*",
-    "@atlas/migration": "workspace:*",
-    "@atlas/memory": "workspace:*",
-    "@atlas/privacy": "workspace:*",
-    "@atlas/types": "workspace:*",
-    "@atlas/world-model": "workspace:*"
-  }
+﻿{
+    "name":  "lmti",
+    "version":  "0.0.0",
+    "private":  false,
+    "bin":  {
+                "lmti":  "dist/index.js",
+                "atlas":  "dist/index.js"
+            },
+    "main":  "dist/index.js",
+    "types":  "dist/index.d.ts",
+    "dependencies":  {
+                         "@atlas/compiler":  "workspace:*",
+                         "@atlas/cognition":  "workspace:*",
+                         "@atlas/kernel":  "workspace:*",
+                         "@atlas/migration":  "workspace:*",
+                         "@atlas/memory":  "workspace:*",
+                         "@atlas/privacy":  "workspace:*",
+                         "@atlas/types":  "workspace:*",
+                         "@atlas/world-model":  "workspace:*"
+                     },
+    "description":  "LMTI CLI for local-first project memory, context routing, privacy, verification, and lesson capture for AI coding agents. lmti is the primary bin; atlas is a legacy/internal alias.",
+    "repository":  {
+                       "type":  "git",
+                       "url":  "https://github.com/vuthuanphat6-byte/lmti-atlas.git",
+                       "directory":  "packages/cli"
+                   }
 }
