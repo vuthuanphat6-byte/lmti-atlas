@@ -2,6 +2,9 @@
 
 Date: 2026-06-29
 
+Naming note: `@atlas/*` package names are internal local-alpha implementation
+namespaces for LMTI. They are not a separate product identity.
+
 | Package | Boundary |
 | --- | --- |
 | `@atlas/compiler` | Reads target projects as untrusted input. It must not execute target code, install target dependencies, follow symlinks or read ignored secret files. |

@@ -3,7 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "packageManager": "pnpm@10.13.1",
-  "description": "Local-first project memory and verification layer for AI coding agents.",
+  "description": "LMTI monorepo: local-first project memory, context routing, privacy, verification, and lesson capture for AI coding agents. @atlas/* is an internal local-alpha namespace.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vuthuanphat6-byte/lmti-atlas.git"
+  },
   "keywords": [
     "ai-agent",
     "coding-agent",

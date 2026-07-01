@@ -1,6 +1,6 @@
 # LMTI Debug Guide
 
-LMTI is a local project memory layer for ATLAS. Treat it as advisory context. Source code, tests and command output remain the verification source.
+LMTI is a local project memory/context layer for AI coding agents. Treat it as advisory context. Source code, tests and command output remain the verification source.
 
 ## Run Locally
 
@@ -25,8 +25,8 @@ npm run lmti:memory:stats
 
 The package exposes these bins in `packages/cli/package.json`:
 
-- `lmti`
-- `atlas`
+- `lmti` - primary public CLI command.
+- `atlas` - legacy/internal local-alpha alias.
 
 For local development, prefer `npm exec -- lmti --help` or `.\node_modules\.bin\lmti.CMD --help` on Windows. If a global command is required, link with the workspace package manager after verifying it is available:
 

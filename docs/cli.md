@@ -9,6 +9,10 @@ node packages/cli/dist/index.js --help
 If the package is linked or installed locally, use the equivalent `lmti ...`
 commands.
 
+`lmti` is the primary CLI command. If an `atlas` bin is present, treat it as a
+legacy/internal local-alpha alias. Documentation should use `lmti` as the
+public command name.
+
 ## Current Status
 
 - Stable local workflow: `init`, `compile`, `inspect`, `context`,

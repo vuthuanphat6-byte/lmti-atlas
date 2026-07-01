@@ -1,10 +1,13 @@
-# LMTI-Atlas Threat Model
+# LMTI Threat Model
 
 Date: 2026-06-29
 
-LMTI-Atlas treats project knowledge, memory, context, adapter output and audit
+LMTI treats project knowledge, memory, context, adapter output and audit
 data as sensitive by default. The security posture is deny by default, least
 privilege, privacy-first, local-first and no raw secret output.
+
+Naming note: `@atlas/*` remains an internal local-alpha package namespace. It is
+not a separate public product identity.
 
 | # | Threat | Risk | Attack Path | Affected Modules | Current Protection | Missing Protection | Mitigation | Test Coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |

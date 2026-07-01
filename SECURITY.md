@@ -14,8 +14,7 @@ you have a security report, but do not include exploit details, secrets, tokens,
 private paths, customer data, or raw memory content. The maintainer should then
 provide a private contact path.
 
-TODO for project owner: choose and publish an official security contact before
-public release.
+TODO: Publish an official security contact before public release.
 
 ## Do Not Include Secrets
 
@@ -63,4 +62,3 @@ For high-impact issues, include:
 - Actual unsafe behavior.
 - Whether the issue affects prompt/context export.
 - Sanitized logs without secrets.
-

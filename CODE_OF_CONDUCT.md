@@ -25,6 +25,4 @@ Maintainers may edit, hide, or remove comments and contributions that violate
 this code. Severe or repeated violations may lead to temporary or permanent loss
 of participation privileges.
 
-TODO for project owner: publish an official maintainer contact path before
-public release.
-
+TODO: Publish an official maintainer contact path before public release.

@@ -13,7 +13,11 @@ secrets/
 credentials/
 
 # Local runtime data
-.lmti/
+.lmti/*
+!.lmti/
+!.lmti/layer.json
+!.lmti/README.md
+!.lmti/AGENT_BOUNDARY.md
 .atlas/
 .agents/
 .codex/
@@ -26,8 +30,19 @@ coverage/
 *.sqlite
 *.sqlite3
 *.db
+.lmti/cache/
+.lmti/events/
+.lmti/experiments/
+.lmti/logs/
 .lmti/memory/
+.lmti/privacy/
+.lmti/runtime/
+.lmti/tmp/
 .lmti/archive/
+.lmti/project.amf.json
+.lmti/config.json
+.lmti/index.json
+.lmti/frameworks.yml
 
 # Dependency folders
 node_modules/
