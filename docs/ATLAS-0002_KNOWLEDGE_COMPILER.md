@@ -229,7 +229,7 @@ Knowledge Compiler v0 must:
 * record confidence and source categories without embedding raw secrets,
 * exclude ignored files and common secret locations unless explicitly allowed.
 
-[CẢNH BÁO BẢO MẬT]
+[SECURITY WARNING]
 
 The compiler must treat source repositories as hostile input. A malicious
 repository can contain prompt-injection text, poisoned documentation, oversized

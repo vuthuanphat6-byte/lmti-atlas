@@ -1897,7 +1897,7 @@ function intentKeywords(intent: InferredIntent["primaryIntent"]): string[] {
     case "debug":
       return ["debug", "error", "risk", "module", "trace"];
     case "bugfix":
-      return ["bug", "fix", "error", "loi"];
+      return ["bug", "fix", "error"];
     case "api":
       return ["api", "endpoint", "request", "response"];
     case "partner":
@@ -1981,12 +1981,8 @@ function tokenize(query: string): string[] {
 
 function normalizeSearchText(value: string): string {
   return value
-    .replace(/l(?:á|Ã¡)»(?:—|�)?i/giu, "loi")
-    .replace(/b(?:á|Ã¡)»(?:‹|�)?/giu, "bi")
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
-    .replace(/đ/g, "d")
-    .replace(/Đ/g, "d")
     .toLowerCase();
 }
 

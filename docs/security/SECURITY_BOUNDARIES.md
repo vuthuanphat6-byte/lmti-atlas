@@ -1,5 +1,7 @@
 # Security Boundaries
 
+> Status: Security documentation
+
 Date: 2026-06-29
 
 Naming note: `@atlas/*` package names are internal local-alpha implementation

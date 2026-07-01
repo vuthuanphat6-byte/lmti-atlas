@@ -1,9 +1,10 @@
 {
   "name": "atlas-root",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "packageManager": "pnpm@10.13.1",
-  "description": "LMTI monorepo: local-first project memory, context routing, privacy, verification, and lesson capture for AI coding agents. @atlas/* is an internal local-alpha namespace.",
+  "description": "LMTI monorepo: local AI memory, safety, and skill routing for AI coding agents. @atlas/* is an internal local-alpha namespace.",
+  "author": "Edgar Vu - Cyno Software",
   "repository": {
     "type": "git",
     "url": "https://github.com/vuthuanphat6-byte/lmti-atlas.git"
@@ -33,6 +34,10 @@
     "lmti:help": "node packages/cli/dist/index.js --help",
     "lmti:doctor": "node packages/cli/dist/index.js doctor",
     "lmti:compile": "node packages/cli/dist/index.js compile",
+    "lmti:publish:check": "node packages/cli/dist/index.js publish check",
+    "lmti:publish:preflight": "node packages/cli/dist/index.js publish preflight",
+    "go:build": "go build ./cmd/lmti",
+    "go:test": "go test ./...",
     "lmti:memory:stats": "node packages/cli/dist/index.js memory stats",
     "memory:init": "node packages/cli/dist/index.js memory init",
     "memory:add": "node packages/cli/dist/index.js memory add",
@@ -70,5 +75,6 @@
   },
   "engines": {
     "node": ">=20.0.0"
-  }
+  },
+  "license": "Apache-2.0"
 }

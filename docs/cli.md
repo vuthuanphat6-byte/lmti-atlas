@@ -1,5 +1,7 @@
 # CLI
 
+> Status: Local-alpha documentation
+
 Run the CLI from source until package distribution is finalized:
 
 ```bash
@@ -15,14 +17,50 @@ public command name.
 
 ## Current Status
 
-- Stable local workflow: `init`, `compile`, `inspect`, `context`,
-  `preflight`, `doctor`, `attach codex`, `memory`, and `task done`.
+- Stable local workflow: `init`, `check`, `doctor`, `route`, `skill`,
+  `publish check`, `compile`, `inspect`, `context`, `preflight`,
+  `attach codex`, `memory`, and `task done`.
 - Experimental or diagnostic surfaces: `framework`, `actions`, `mind`,
   `cognition`, `world`, `experiment`, `benchmark`, and `privacy audit`.
 - Planned names are listed at the end of this file. They should not be shown as
   working aliases until the CLI implements them.
 
 ## Core Commands
+
+The Go core CLI is being introduced alongside the existing TypeScript
+local-alpha CLI. Treat these commands as experimental Go-core surfaces until
+the Go binary is linked as `lmti` and parity tests are part of the normal
+verification path. Until then, run Go-core commands with:
+
+```bash
+go run ./cmd/lmti <command>
+```
+
+Go-core phase commands:
+
+```bash
+go run ./cmd/lmti init
+go run ./cmd/lmti doctor --json
+go run ./cmd/lmti memory add --title "Rule" --content "Run publish preflight first." --json
+go run ./cmd/lmti memory search "publish" --json
+go run ./cmd/lmti memory retrieve --intent publish --json
+go run ./cmd/lmti memory stats --json
+go run ./cmd/lmti migrate from-json --dry-run --json
+go run ./cmd/lmti publish check --json
+go run ./cmd/lmti adapter inspect --json
+```
+
+For the TypeScript CLI, the same friendly command names are available through:
+
+```bash
+node packages/cli/dist/index.js check --json
+node packages/cli/dist/index.js route "check before publishing" --json
+node packages/cli/dist/index.js skill route "check before publishing" --json
+node packages/cli/dist/index.js publish check --json
+node packages/cli/dist/index.js policy check --action publish --json
+node packages/cli/dist/index.js config inspect --json
+node packages/cli/dist/index.js agent inspect --json
+```
 
 ### `lmti init`
 
@@ -76,6 +114,83 @@ Expected output: JSON with observer frame, selected memories, blocked memories,
 risk signals, predicted failures, constraints, final context package, egress
 scan result, adapter sandbox result, and metrics.
 
+### `lmti publish check`
+
+Runs the publish/PR/release safety gate. This command should run before pushing
+to a public repo, opening a PR, creating a release, publishing open-source
+artifacts, or changing Git remotes.
+
+```bash
+node packages/cli/dist/index.js publish check
+node packages/cli/dist/index.js publish check --target main --json
+node packages/cli/dist/index.js publish check --strict --fix-suggest
+```
+
+Advanced alias:
+
+```bash
+node packages/cli/dist/index.js publish preflight
+node packages/cli/dist/index.js publish preflight --target main --json
+node packages/cli/dist/index.js publish preflight --strict --fix-suggest
+```
+
+Legacy alias:
+
+```bash
+node packages/cli/dist/index.js preflight publish
+```
+
+Checks include repository identity, origin remote, branch safety, common Git
+history with `origin/<target>`, ahead/behind divergence, dirty working tree,
+protected paths, LMTI layer identity, and configured publish target.
+
+Exit codes:
+
+- `0`: pass.
+- `1`: warnings; review before continuing.
+- `2`: blocked; stop publish/PR/release work until fixed.
+
+Security note: protected path checks inspect Git path/status metadata only. They
+do not read or print raw `.env`, private memory, key, certificate, or secret
+file contents.
+
+### `lmti skill ...`
+
+Routes a user request to the right `skill.md` without executing the task,
+dumping memory, or bypassing policy.
+
+Use `skill` for normal human and agent workflows:
+
+```bash
+lmti skill list
+lmti skill route "check before publishing"
+lmti skill show publish-preflight
+lmti skill validate
+```
+
+Agent JSON:
+
+```bash
+lmti skill route "migrate JSON memory to SQLite" --json
+lmti skill show migration-from-json --json
+```
+
+Advanced Thoth diagnostics are available for local-alpha development:
+
+```bash
+lmti thoth list
+lmti thoth route "publish repo to open source GitHub"
+lmti thoth explain "clean unused code without breaking the current flow"
+lmti thoth inspect publish-preflight
+lmti thoth validate
+lmti thoth doctor
+```
+
+Friendly agent-facing JSON uses the `lmti.cli.v1` envelope. Advanced Go Thoth
+diagnostics may also emit `lmti.thoth.v1`. See [commands.md](commands.md),
+[agent-commands.md](agent-commands.md), [thoth.md](thoth.md), and
+[skills.md](skills.md).
+
 ### `lmti doctor [--fix|--security]`
 
 Diagnoses storage, AMF noise, ignore rules, migration state, and security
@@ -102,8 +217,14 @@ node packages/cli/dist/index.js attach codex
 node packages/cli/dist/index.js memory init
 node packages/cli/dist/index.js memory add --title "Packing rule" --content "A label can print only after all items are completed."
 node packages/cli/dist/index.js memory search "packing label"
-node packages/cli/dist/index.js memory retrieve "fix packing label bug"
-node packages/cli/dist/index.js memory lesson propose --task "Packing fix" --lesson "Verify label-group completion before printing." --files-touched src/orders/packing.ts:modified --commands "npm test:0" --tests "npm test:pass" --outcome pass
+node packages/cli/dist/index.js memory retrieve --intent "fix packing label bug"
+node packages/cli/dist/index.js memory lesson propose \
+  --task "Packing fix" \
+  --lesson "Verify label-group completion before printing." \
+  --files-touched src/orders/packing.ts:modified \
+  --commands "npm test:0" \
+  --tests "npm test:pass" \
+  --outcome pass
 node packages/cli/dist/index.js memory lesson candidates
 node packages/cli/dist/index.js memory lesson show <candidateId>
 node packages/cli/dist/index.js memory lesson approve <candidateId>

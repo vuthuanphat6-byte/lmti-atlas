@@ -1,5 +1,7 @@
 # Adapter Contract
 
+> Status: Local-alpha documentation
+
 LMTI is Codex-first today. Other AI coding agents are planned through the
 adapter layer, but this repository should not claim full support for every
 agent until adapters are implemented, tested, and documented.

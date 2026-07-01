@@ -2501,7 +2501,7 @@ function calculateShortMemoryPromoteScore(input: {
   if (/\b(bug|incident|security|deploy|deployment|architecture|decision|lesson|rule|permission|403|least privilege)\b/i.test(normalized)) {
     score += 0.13;
   }
-  if (/\b(nho|remember|important|quan trong|long-term|luu lai|dung quen|rule|bai hoc|lesson)\b/i.test(normalized)) {
+  if (/\b(remember|important|long-term|rule|lesson)\b/i.test(normalized)) {
     score += 0.14;
   }
   if (/\b(temp|temporary|one-time|build output|latest test|intermediate|scratch)\b/i.test(normalized)) {

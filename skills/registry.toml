@@ -1,0 +1,80 @@
+[[skills]]
+id = "publish-preflight"
+name = "Publish Preflight"
+description = "Check Git, branch, remote, protected files, and repository identity before publishing."
+file = "skills/publish-preflight/skill.md"
+intents = ["publish", "push", "pull_request", "open_source", "release"]
+requires_policy = true
+requires_memory = false
+risk_level = "high"
+
+[[skills]]
+id = "repo-cleanup"
+name = "Repo Cleanup"
+description = "Plan and apply safe repository cleanup without deleting protected knowledge."
+file = "skills/repo-cleanup/skill.md"
+intents = ["cleanup", "refactor", "remove_unused", "organize_repo"]
+requires_policy = true
+requires_memory = true
+risk_level = "medium"
+
+[[skills]]
+id = "security-check"
+name = "Security Check"
+description = "Check for secret leakage, privacy boundary issues, and protected-file risk."
+file = "skills/security-check/skill.md"
+intents = ["security", "secret_scan", "privacy", "leak_check"]
+requires_policy = true
+requires_memory = false
+risk_level = "high"
+
+[[skills]]
+id = "memory-retrieval"
+name = "Memory Retrieval"
+description = "Request policy-safe memory context without dumping raw memory."
+file = "skills/memory-retrieval/skill.md"
+intents = ["memory", "context", "lesson", "retrieve"]
+requires_policy = false
+requires_memory = true
+risk_level = "medium"
+
+[[skills]]
+id = "migration-from-json"
+name = "Migration from JSON"
+description = "Migrate legacy JSON memory toward SQLite with privacy checks and dry-run first."
+file = "skills/migration-from-json/skill.md"
+intents = ["migrate", "json_to_sqlite", "storage_upgrade"]
+requires_policy = true
+requires_memory = true
+risk_level = "medium"
+
+[[skills]]
+id = "documentation"
+name = "Documentation"
+description = "Write or update docs with accurate local-alpha positioning and LMTI naming."
+file = "skills/documentation/skill.md"
+intents = ["readme", "docs", "documentation", "publish_docs"]
+requires_policy = false
+requires_memory = true
+risk_level = "low"
+
+[[skills]]
+id = "doctor"
+name = "Doctor"
+description = "Diagnose LMTI health, configuration, schema, and security posture."
+file = "skills/doctor/skill.md"
+intents = ["doctor", "health_check", "validate_setup"]
+requires_policy = false
+requires_memory = false
+risk_level = "low"
+
+[[skills]]
+id = "adapter"
+name = "Adapter"
+description = "Guide adapter or plugin integration through manifests, scopes, and sandbox rules."
+file = "skills/adapter/skill.md"
+intents = ["adapter", "agent_adapter", "plugin"]
+requires_policy = true
+requires_memory = true
+risk_level = "medium"
+

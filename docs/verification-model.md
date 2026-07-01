@@ -1,5 +1,7 @@
 # Verification Model
 
+> Status: Local-alpha documentation
+
 LMTI memory is guidance, not truth.
 
 Agents should verify source code, tests, builds, CLI output, runtime behavior,

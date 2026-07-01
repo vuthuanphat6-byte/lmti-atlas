@@ -1,59 +1,63 @@
 # Open Source Readiness
 
-This checklist tracks what must be true before the LMTI repository is made
-public as a v0.1 release candidate.
+> Status: Active alpha-release checklist
 
-Publish repository: `vuthuanphat6-byte/lmti-atlas`.
+This checklist tracks whether the repository is ready to be published as
+`v0.1.0-alpha.1`.
 
-Do not use a private or legacy `/atlas` repository path as the public product
-identity.
+Expected public repository: `vuthuanphat6-byte/lmti-atlas`.
+
+## Readiness Matrix
+
+| Area | Status | Evidence | Remaining Work |
+|---|---|---|---|
+| README | Pass | README has alpha status, scope, quick start, CLI usage, storage, security, docs, license, and author sections. | Re-check before release. |
+| License | Pass | `LICENSE` exists and package metadata uses `Apache-2.0`. | Confirm owner approval of Apache-2.0. |
+| Security policy | Pass | `SECURITY.md` documents supported alpha versions, reporting, local state, and limitations. | Publish official private security contact. |
+| Contributing guide | Pass | `CONTRIBUTING.md` includes setup, branches, commits, PR checklist, security rules, and docs rules. | Keep examples current. |
+| Code of conduct | Warn | `CODE_OF_CONDUCT.md` exists. | Publish official maintainer contact. |
+| CI workflow | Pass | `.github/workflows/ci.yml` runs pnpm install, build, and test on Node 24. | Confirm first public CI run. |
+| Package versions | Pass | Workspace packages are normalized to `0.1.0-alpha.1`. | Re-run package metadata check before tagging. |
+| Package license fields | Pass | Workspace package files include `Apache-2.0`. | Re-run package metadata check before publishing packages. |
+| `.gitignore` | Warn | New `.lmti/`, `.atlas/`, temp files, logs, DBs, and secret-like files are ignored. | Three `.lmti/` docs/boundary files are already tracked and need owner review before untracking. |
+| CLI docs | Pass | README and docs distinguish implemented, experimental, and planned commands. | Keep TypeScript and Go-core status separate. |
+| Local storage docs | Pass | README states `.lmti/` is local runtime state and SQLite is target durable memory. | Add migration notes when storage contracts change. |
+| Security model | Pass | Docs say LMTI reduces risk and does not replace tests, secret scanning, or human review. | Continue expanding adapter-specific tests. |
+| Publish preflight docs | Pass | `docs/publish-preflight.md` documents checks, exit codes, and blocked behavior. | Re-run command immediately before public release. |
+| Reality cleanup | Warn | `docs/reality-checklist.md` records local-alpha caveats and Go-toolchain limitation. | Re-run scans after final edits. |
+| Public publish gate | Blocked until final clean tree | `lmti publish check` exists and blocks unsafe release states. | Must pass or have owner-approved remediation immediately before release. |
 
 ## Required Before Public Release
 
-- [x] Product identity is LMTI, not ATLAS.
-- [x] Publish repository is `vuthuanphat6-byte/lmti-atlas`, not a private or legacy `/atlas` path.
-- [x] README explains current scope honestly.
-- [ ] LICENSE exists or owner has selected license.
-- [x] SECURITY.md has a private reporting path or clear TODO.
-- [x] CODE_OF_CONDUCT.md has maintainer contact or clear TODO.
-- [x] CONTRIBUTING.md explains setup, tests, docs, and secret hygiene.
-- [x] No real secrets were detected in the current high-confidence scan.
-- [x] No tracked local `.lmti/` memory databases were detected.
-- [x] No customer/private deployment data was detected in the current review.
-- [x] Package distribution status is clear.
-- [x] Codex-first scope is clear.
-- [x] Other agents are described as roadmap/adapter targets, not fully supported runtimes.
-- [x] Known limitations are visible.
-- [x] Examples work from source.
-- [x] `npm.cmd run build` passes in the current workspace.
-- [x] `npm.cmd test` passes in the current workspace.
-
-## Current Blocking Items
-
-- No `LICENSE` file is present yet. The owner should choose Apache-2.0 or MIT
-  before public release.
-- `SECURITY.md` intentionally keeps a security-contact TODO until the owner
-  publishes an official private reporting path.
-- `CODE_OF_CONDUCT.md` intentionally keeps a maintainer-contact TODO until the
-  owner publishes an official contact path.
-- Secret/private-data scanning should be repeated immediately before publishing.
+- Run `pnpm build`.
+- Run `pnpm test`.
+- Run `node packages/cli/dist/index.js publish check`.
+- Review `git status --short`.
+- Review tracked `.lmti/` files and decide whether they are intentionally
+  public documentation or should be removed from tracking in a separate commit.
+- Confirm the public remote is `https://github.com/vuthuanphat6-byte/lmti-atlas.git`.
+- Confirm Apache-2.0 is the intended public license.
+- Publish private security and maintainer contact paths.
 
 ## Scope Guardrails
 
-LMTI is Local Alpha and Codex-first.
-
-Do not claim production readiness, enterprise readiness, universal all-agent
-support, complete AI framework status, complete Artificial Mind status, model
-training, unchecked self-learning, replacement for dedicated secret scanning, or
-replacement for source-code verification.
-
-Use safer wording:
+Safe public wording:
 
 ```text
-Local Alpha
-Codex-first
-Adapter contract planned
-Memory is guidance, not truth
-Lesson candidates require review
-Privacy gates reduce leakage risk but do not replace dedicated secret scanning
+Local-first project memory and safety layer for AI coding agents.
+Public alpha.
+Codex-first workflow.
+Memory is guidance, not truth.
+Privacy gates reduce leakage risk but do not replace dedicated secret scanning.
+Publish preflight is a safety gate, not a guarantee.
 ```
+
+Avoid these claims:
+
+- Production-ready agent runtime.
+- Complete AI framework.
+- Artificial mind.
+- Universal all-agent support.
+- Hosted team sync.
+- Model training or autonomous self-learning.
+- Replacement for tests, source review, or human approval.

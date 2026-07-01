@@ -1603,8 +1603,6 @@ function normalizeText(value: string): string {
   return value
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
-    .replace(/Ä‘/g, "d")
-    .replace(/Đ/g, "d")
     .toLowerCase();
 }
 

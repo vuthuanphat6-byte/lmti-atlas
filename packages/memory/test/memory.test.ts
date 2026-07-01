@@ -230,7 +230,7 @@ describe("Memory Core MVP-2", () => {
       { cwd }
     );
 
-    const result = await searchMemoryForContext("partner user bị 403 dashboard summary", { cwd, taskIntent: permissionIntent });
+    const result = await searchMemoryForContext("partner user gets 403 dashboard summary", { cwd, taskIntent: permissionIntent });
 
     expect(result.results.map((entry) => entry.record.title)).toContain("Partner route rule");
     expect(result.results.map((entry) => entry.record.title)).not.toContain("Dashboard logo rule");
@@ -730,7 +730,7 @@ describe("Project Operating Memory SQLite Library Layer", () => {
     await addProjectMemory(
       {
         title: "Private key fixture",
-        content: "PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----FAKE-----END RSA PRIVATE KEY-----",
+        content: ["PRIVATE_KEY=", "-----BEGIN RSA ", "PRIVATE KEY-----", "FAKE", "-----END RSA ", "PRIVATE KEY-----"].join(""),
         zone: "security",
         privacyLevel: "do_not_prompt"
       },

@@ -1,9 +1,10 @@
+import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createMemory } from "@atlas/memory";
-import { attachCodex, benchmarkPreflightCommand, compileCommand, contextCommand, doctorSecurityCommand, initCommand, main, preflightCommand, rememberCommand, taskDoneCommand, thinkingExperimentCommand } from "../src/index";
+import { attachCodex, benchmarkPreflightCommand, compileCommand, contextCommand, doctorSecurityCommand, initCommand, main, preflightCommand, publishPreflightCommand, rememberCommand, taskDoneCommand, thinkingExperimentCommand } from "../src/index";
 
 const githubTokenFixture = ["ghp", "abcdefghijklmnopqrstuvwxyz123456"].join("_");
 
@@ -90,12 +91,14 @@ async function writeLegacyAmf(filePath: string, name: string): Promise<void> {
   );
 }
 
-async function runCliInFixture(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+async function runCliInFixture(cwd: string, args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const originalCwd = process.cwd();
   const originalLog = console.log;
   const originalWarn = console.warn;
+  const originalExitCode = process.exitCode;
   const stdout: string[] = [];
   const stderr: string[] = [];
+  process.exitCode = undefined;
 
   console.log = (...values: unknown[]) => {
     stdout.push(values.map(String).join(" "));
@@ -104,6 +107,7 @@ async function runCliInFixture(cwd: string, args: string[]): Promise<{ stdout: s
     stderr.push(values.map(String).join(" "));
   };
 
+  let exitCode = 0;
   try {
     if (args[0] === "actions") {
       await main(args, { cwd });
@@ -112,12 +116,135 @@ async function runCliInFixture(cwd: string, args: string[]): Promise<{ stdout: s
       await main(args);
     }
   } finally {
+    exitCode = typeof process.exitCode === "number" ? process.exitCode : 0;
     process.chdir(originalCwd);
     console.log = originalLog;
     console.warn = originalWarn;
+    process.exitCode = originalExitCode;
   }
 
-  return { stdout: stdout.join("\n"), stderr: stderr.join("\n") };
+  return { stdout: stdout.join("\n"), stderr: stderr.join("\n"), exitCode };
+}
+
+async function createSkillFixture(): Promise<string> {
+  const root = await mkdtemp(path.join(os.tmpdir(), "lmti-skill-"));
+  await mkdir(path.join(root, "skills", "publish-preflight"), { recursive: true });
+  await mkdir(path.join(root, "skills", "repo-cleanup"), { recursive: true });
+  await writeFile(
+    path.join(root, "skills", "registry.toml"),
+    [
+      "[[skills]]",
+      'id = "publish-preflight"',
+      'name = "Publish Preflight"',
+      'description = "Check Git, branch, remote, protected files, and repository identity before publishing."',
+      'file = "skills/publish-preflight/skill.md"',
+      'intents = ["publish", "push", "pull_request", "open_source", "release"]',
+      "requires_policy = true",
+      "requires_memory = false",
+      'risk_level = "high"',
+      "",
+      "[[skills]]",
+      'id = "repo-cleanup"',
+      'name = "Repo Cleanup"',
+      'description = "Plan and apply safe repository cleanup without deleting protected knowledge."',
+      'file = "skills/repo-cleanup/skill.md"',
+      'intents = ["cleanup", "refactor", "remove_unused", "organize_repo"]',
+      "requires_policy = true",
+      "requires_memory = true",
+      'risk_level = "medium"',
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  const skillBody = (name: string) => [
+    `# Skill: ${name}`,
+    "",
+    "## Purpose",
+    `Use ${name}.`,
+    "",
+    "## When to use",
+    "Use when the task matches the skill.",
+    "",
+    "## Inputs needed",
+    "Task request.",
+    "",
+    "## Required commands",
+    "Run safe checks only.",
+    "",
+    "## Safety rules",
+    "Do not print secrets.",
+    "",
+    "## Block conditions",
+    "Stop on protected data.",
+    "",
+    "## Output expected",
+    "Return a concise summary.",
+    "",
+    "## Notes",
+    "Fixture skill."
+  ].join("\n");
+  await writeFile(path.join(root, "skills", "publish-preflight", "skill.md"), skillBody("Publish Preflight"), "utf8");
+  await writeFile(path.join(root, "skills", "repo-cleanup", "skill.md"), skillBody("Repo Cleanup"), "utf8");
+  return root;
+}
+
+function runGit(cwd: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+}
+
+async function createPublishGitFixture(publicRepo?: string): Promise<{ worktree: string; remote: string; publicRepo: string }> {
+  const root = await mkdtemp(path.join(os.tmpdir(), "lmti-publish-"));
+  const worktree = path.join(root, "worktree");
+  const remote = publicRepo ?? "https://github.com/vuthuanphat6-byte/lmti-atlas.git";
+
+  runGit(root, ["init", worktree]);
+  runGit(worktree, ["config", "user.email", "lmti-test@example.com"]);
+  runGit(worktree, ["config", "user.name", "LMTI Test"]);
+  const targetRepo = remote;
+
+  await mkdir(path.join(worktree, ".lmti"), { recursive: true });
+  await writeFile(
+    path.join(worktree, "package.json"),
+    JSON.stringify(
+      {
+        name: "lmti-publish-fixture",
+        description: "LMTI publish fixture.",
+        author: "Edgar Vu - Cyno Software",
+        license: "MIT",
+        repository: { type: "git", url: targetRepo }
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+  await writeFile(
+    path.join(worktree, ".lmti", "layer.json"),
+    JSON.stringify(
+      {
+        name: "LMTI",
+        type: "independent_agent_layer",
+        publish_repository: targetRepo
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+  await writeFile(path.join(worktree, "README.md"), "# LMTI publish fixture\n", "utf8");
+  await writeFile(path.join(worktree, "LICENSE"), "MIT\n", "utf8");
+  await writeFile(path.join(worktree, "SECURITY.md"), "# Security\n\nReport privately.\n", "utf8");
+  runGit(worktree, ["add", "."]);
+  runGit(worktree, ["commit", "-m", "init fixture"]);
+  runGit(worktree, ["branch", "-M", "main"]);
+  runGit(worktree, ["remote", "add", "origin", targetRepo]);
+  runGit(worktree, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+
+  return { worktree, remote, publicRepo: targetRepo };
 }
 
 describe("LMTI CLI commands", () => {
@@ -250,7 +377,7 @@ describe("LMTI CLI commands", () => {
       { cwd }
     );
 
-    const context = await contextCommand(cwd, "partner user bị 403 dashboard summary");
+    const context = await contextCommand(cwd, "partner user gets 403 dashboard summary");
 
     expect(context.inferredIntent.primaryIntent).toBe("permission");
     expect(context.inferredIntent.secondaryIntents).toContain("partner");
@@ -483,6 +610,234 @@ describe("LMTI CLI commands", () => {
       defaultModelTarget: "external_model"
     });
   });
+
+  it("publish preflight passes for a clean branch on the configured repo", async () => {
+    const { worktree, publicRepo } = await createPublishGitFixture();
+
+    const result = await publishPreflightCommand(worktree, { publicRepo });
+
+    expect(result.result).toBe("pass");
+    expect(result.exitCode).toBe(0);
+    expect(result.checks.find((check) => check.name === "remote_origin")?.status).toBe("pass");
+    expect(result.checks.find((check) => check.name === "git_history")?.status).toBe("pass");
+    expect(result.checks.find((check) => check.name === "protected_files")?.status).toBe("pass");
+  }, 15_000);
+
+  it("publish preflight exposes JSON output for automation", async () => {
+    const { worktree } = await createPublishGitFixture();
+
+    const { stdout } = await runCliInFixture(worktree, ["publish", "preflight", "--json"]);
+    const parsed = JSON.parse(stdout) as { schemaVersion: string; command: string; status: string; data: { exitCode: number } };
+
+    expect(parsed.schemaVersion).toBe("lmti.cli.v1");
+    expect(parsed.command).toBe("lmti.publish.preflight");
+    expect(parsed.status).toBe("pass");
+    expect(parsed.data.exitCode).toBe(0);
+  }, 15_000);
+
+  it("publish check is a safe alias for publish preflight", async () => {
+    const { worktree } = await createPublishGitFixture();
+
+    const preflight = await runCliInFixture(worktree, ["publish", "preflight", "--json"]);
+    const check = await runCliInFixture(worktree, ["publish", "check", "--json"]);
+    const parsedPreflight = JSON.parse(preflight.stdout) as { command: string; status: string; data: { result: string } };
+    const parsedCheck = JSON.parse(check.stdout) as { command: string; status: string; data: { result: string } };
+
+    expect(check.exitCode).toBe(preflight.exitCode);
+    expect(parsedCheck.command).toBe("lmti.publish.preflight");
+    expect(parsedCheck.status).toBe(parsedPreflight.status);
+    expect(parsedCheck.data.result).toBe(parsedPreflight.data.result);
+  }, 15_000);
+
+  it("publish preflight blocks a wrong origin remote", async () => {
+    const publicRepo = "https://github.com/vuthuanphat6-byte/lmti-atlas.git";
+    const { worktree } = await createPublishGitFixture(publicRepo);
+    runGit(worktree, ["remote", "set-url", "origin", "https://github.com/vuthuanphat6-byte/atlas.git"]);
+
+    const result = await publishPreflightCommand(worktree, { publicRepo });
+
+    expect(result.result).toBe("blocked");
+    expect(result.exitCode).toBe(2);
+    expect(result.checks.find((check) => check.name === "remote_origin")?.status).toBe("error");
+  }, 15_000);
+
+  it("publish preflight JSON errors include stable error codes", async () => {
+    const publicRepo = "https://github.com/vuthuanphat6-byte/lmti-atlas.git";
+    const { worktree } = await createPublishGitFixture(publicRepo);
+    runGit(worktree, ["remote", "set-url", "origin", "https://github.com/vuthuanphat6-byte/atlas.git"]);
+
+    const { stdout } = await runCliInFixture(worktree, ["publish", "preflight", "--json"]);
+    const parsed = JSON.parse(stdout) as { status: string; errors: Array<{ code: string; message: string }> };
+
+    expect(parsed.status).toBe("blocked");
+    expect(parsed.errors.map((error) => error.code)).toContain("REMOTE_ORIGIN_MISMATCH");
+  }, 15_000);
+
+  it("publish check blocked results return exit code 2", async () => {
+    const publicRepo = "https://github.com/vuthuanphat6-byte/lmti-atlas.git";
+    const { worktree } = await createPublishGitFixture(publicRepo);
+    runGit(worktree, ["remote", "set-url", "origin", "https://github.com/vuthuanphat6-byte/atlas.git"]);
+
+    const result = await runCliInFixture(worktree, ["publish", "check", "--json"]);
+    const parsed = JSON.parse(result.stdout) as { status: string; errors: Array<{ code: string }> };
+
+    expect(result.exitCode).toBe(2);
+    expect(parsed.status).toBe("blocked");
+    expect(parsed.errors.map((error) => error.code)).toContain("REMOTE_ORIGIN_MISMATCH");
+  }, 15_000);
+
+  it("publish preflight blocks branches with no common history", async () => {
+    const { worktree, publicRepo } = await createPublishGitFixture();
+    runGit(worktree, ["checkout", "--orphan", "publish/wrong-history"]);
+    runGit(worktree, ["rm", "-r", "--cached", "."]);
+    await writeFile(path.join(worktree, "orphan.txt"), "independent history\n", "utf8");
+    runGit(worktree, ["add", "."]);
+    runGit(worktree, ["commit", "-m", "orphan publish branch"]);
+
+    const result = await publishPreflightCommand(worktree, { publicRepo });
+
+    expect(result.result).toBe("blocked");
+    expect(result.checks.find((check) => check.name === "git_history")?.status).toBe("error");
+    expect(result.checks.find((check) => check.name === "git_history")?.message).toContain("entirely different commit histories");
+  }, 15_000);
+
+  it("publish preflight warns when the branch is ahead of target", async () => {
+    const { worktree, publicRepo } = await createPublishGitFixture();
+    await writeFile(path.join(worktree, "README.md"), "# LMTI publish fixture\n\nUpdated.\n", "utf8");
+    runGit(worktree, ["add", "README.md"]);
+    runGit(worktree, ["commit", "-m", "docs update"]);
+
+    const result = await publishPreflightCommand(worktree, { publicRepo });
+
+    expect(result.result).toBe("warning");
+    expect(result.exitCode).toBe(1);
+    expect(result.checks.find((check) => check.name === "commit_divergence")?.status).toBe("warn");
+    expect(result.checks.find((check) => check.name === "commit_divergence")?.message).toContain("Ahead 1 commits");
+  }, 15_000);
+
+  it("publish warning JSON uses warn status and exit code 1", async () => {
+    const { worktree } = await createPublishGitFixture();
+    await writeFile(path.join(worktree, "README.md"), "# LMTI publish fixture\n\nUpdated.\n", "utf8");
+    runGit(worktree, ["add", "README.md"]);
+    runGit(worktree, ["commit", "-m", "docs update"]);
+
+    const result = await runCliInFixture(worktree, ["publish", "check", "--json"]);
+    const parsed = JSON.parse(result.stdout) as { status: string; warnings: Array<{ code: string }> };
+
+    expect(result.exitCode).toBe(1);
+    expect(parsed.status).toBe("warn");
+    expect(parsed.warnings.map((warning) => warning.code)).toContain("CONFIG_INVALID");
+  }, 15_000);
+
+  it("skill route and route aliases return stable JSON envelopes", async () => {
+    const cwd = await createSkillFixture();
+
+    const skillRoute = await runCliInFixture(cwd, ["skill", "route", "publish repo to open source", "--json"]);
+    const topLevelRoute = await runCliInFixture(cwd, ["route", "publish repo to open source", "--json"]);
+    const parsedSkill = JSON.parse(skillRoute.stdout) as { schemaVersion: string; command: string; status: string; data: { selectedSkill: { id: string } } };
+    const parsedAlias = JSON.parse(topLevelRoute.stdout) as { command: string; data: { selectedSkill: { id: string } } };
+
+    expect(parsedSkill.schemaVersion).toBe("lmti.cli.v1");
+    expect(parsedSkill.command).toBe("lmti.skill.route");
+    expect(parsedSkill.status).toMatch(/^(pass|warn)$/u);
+    expect(parsedSkill.data.selectedSkill.id).toBe("publish-preflight");
+    expect(parsedAlias.command).toBe("lmti.skill.route");
+    expect(parsedAlias.data.selectedSkill.id).toBe(parsedSkill.data.selectedSkill.id);
+  });
+
+  it("skill show loads only the selected skill", async () => {
+    const cwd = await createSkillFixture();
+
+    const result = await runCliInFixture(cwd, ["skill", "show", "publish-preflight", "--json"]);
+    const parsed = JSON.parse(result.stdout) as { status: string; data: { skill: { id: string }; content: string } };
+
+    expect(result.exitCode).toBe(0);
+    expect(parsed.status).toBe("pass");
+    expect(parsed.data.skill.id).toBe("publish-preflight");
+    expect(parsed.data.content).toContain("Publish Preflight");
+    expect(parsed.data.content).not.toContain("Repo Cleanup");
+  });
+
+  it("skill route warning returns exit code 1", async () => {
+    const cwd = await createSkillFixture();
+
+    const result = await runCliInFixture(cwd, ["skill", "route", "unmatched specialized request", "--json"]);
+    const parsed = JSON.parse(result.stdout) as { status: string; warnings: Array<{ code: string }> };
+
+    expect(result.exitCode).toBe(1);
+    expect(parsed.status).toBe("warn");
+    expect(parsed.warnings.map((warning) => warning.code)).toContain("THOTH_NO_SKILL_FOUND");
+  });
+
+  it("policy check reports approval requirements without executing actions", async () => {
+    const cwd = await createFixtureProject();
+
+    const result = await runCliInFixture(cwd, ["policy", "check", "--action", "publish", "--json"]);
+    const parsed = JSON.parse(result.stdout) as { status: string; data: { decision: string } };
+
+    expect(result.exitCode).toBe(1);
+    expect(parsed.status).toBe("warn");
+    expect(parsed.data.decision).toBe("require_user_approval");
+  });
+
+  it("config inspect returns shape only in the CLI envelope", async () => {
+    const cwd = await createFixtureProject();
+    await initCommand(cwd);
+
+    const result = await runCliInFixture(cwd, ["config", "inspect", "--json"]);
+    const parsed = JSON.parse(result.stdout) as { schemaVersion: string; status: string; data: { exists: boolean; keys: string[] } };
+
+    expect(parsed.schemaVersion).toBe("lmti.cli.v1");
+    expect(parsed.status).toBe("warn");
+    expect(parsed.data.exists).toBe(true);
+    expect(parsed.data.keys).toContain("privacy");
+    expect(result.stdout).not.toContain("allowExternalModelRawMemory");
+  });
+
+  it("memory retrieve supports --intent and keeps secret or do_not_prompt records out of JSON context", async () => {
+    const cwd = await createFixtureProject();
+    await runCliInFixture(cwd, ["memory", "init"]);
+    await runCliInFixture(cwd, ["memory", "add", "--title", "Safe route", "--content", "Use the public route check.", "--privacy-level", "internal"]);
+    await runCliInFixture(cwd, ["memory", "add", "--title", "Secret route", "--content", "OPENAI_API_KEY=sk-proj-FAKE_TEST_VALUE_12345678901234567890", "--privacy-level", "secret"]);
+    await runCliInFixture(cwd, ["memory", "add", "--title", "Do not prompt route", "--content", "Private key handling rule.", "--privacy-level", "do_not_prompt"]);
+
+    const result = await runCliInFixture(cwd, ["memory", "retrieve", "--intent", "Safe route", "--json"]);
+    const parsed = JSON.parse(result.stdout) as { schemaVersion: string; command: string; data: { results: Array<{ item: { title: string; privacyLevel: string } }> } };
+    const titles = parsed.data.results.map((entry) => entry.item.title).join("\n");
+    const privacyLevels = parsed.data.results.map((entry) => entry.item.privacyLevel);
+
+    expect(parsed.schemaVersion).toBe("lmti.cli.v1");
+    expect(parsed.command).toBe("lmti.memory.retrieve");
+    expect(titles).not.toContain("Secret route");
+    expect(titles).not.toContain("Do not prompt route");
+    expect(Array.isArray(parsed.data.results)).toBe(true);
+    expect(privacyLevels).not.toContain("secret");
+    expect(privacyLevels).not.toContain("do_not_prompt");
+    expect(result.stdout).not.toContain("sk-proj-FAKE_TEST_VALUE");
+  });
+
+  it("publish preflight warns on a dirty working tree", async () => {
+    const { worktree, publicRepo } = await createPublishGitFixture();
+    await writeFile(path.join(worktree, "README.md"), "# Dirty fixture\n", "utf8");
+
+    const result = await publishPreflightCommand(worktree, { publicRepo });
+
+    expect(result.result).toBe("warning");
+    expect(result.checks.find((check) => check.name === "dirty_working_tree")?.status).toBe("warn");
+  }, 15_000);
+
+  it("publish preflight blocks staged protected files", async () => {
+    const { worktree, publicRepo } = await createPublishGitFixture();
+    await writeFile(path.join(worktree, ".env"), "TOKEN=redacted-fixture\n", "utf8");
+    runGit(worktree, ["add", ".env"]);
+
+    const result = await publishPreflightCommand(worktree, { publicRepo });
+
+    expect(result.result).toBe("blocked");
+    expect(result.exitCode).toBe(2);
+    expect(result.checks.find((check) => check.name === "protected_files")?.status).toBe("error");
+    expect(JSON.stringify(result)).not.toContain("redacted-fixture");
+  }, 15_000);
 
   it("security doctor reports config secret findings without raw leakage", async () => {
     const cwd = await createFixtureProject();

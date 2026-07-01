@@ -1,5 +1,7 @@
 # Privacy Policy
 
+> Status: Security documentation
+
 Date: 2026-06-29
 
 LMTI treats project knowledge as sensitive by default. Privacy decisions must be

@@ -1,7 +1,10 @@
 # Architecture
 
-LMTI is a local-first project memory and verification layer for AI coding
-agents. The current architecture is built around a Codex-first local workflow.
+> Status: Local-alpha documentation
+
+LMTI is an independent local AI memory, safety, and skill-routing layer for AI
+coding agents and software projects. The current architecture is built around a
+Codex-first local workflow.
 
 Naming note: LMTI is the product name. ATLAS is a legacy/internal codename, and
 Project Atlas is the compiled project map artifact produced by `lmti compile`.

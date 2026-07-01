@@ -1,5 +1,7 @@
 # Privacy Model
 
+> Status: Local-alpha documentation
+
 LMTI treats project memory as sensitive by default.
 
 The project is local-first: it does not require a cloud service, external AI

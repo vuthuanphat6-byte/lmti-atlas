@@ -1,7 +1,7 @@
 # LMTI MVP Build Spec
 
-Status: implementation contract candidate  
-Scope: Coding Agent / Codex local MVP  
+Status: implementation contract candidate
+Scope: Coding Agent / Codex local MVP
 Goal: replace draft tables with a buildable kernel contract
 
 This document is not another vision RFC. It is the first build spec for the
@@ -67,7 +67,7 @@ and receive a policy-safe context package with selected memories, blocked
 memories, predicted failures, executive constraints, explanation, and audit
 events.
 
-[CẢNH BÁO BẢO MẬT] The MVP must fail closed. If memory permission, source
+[SECURITY WARNING] The MVP must fail closed. If memory permission, source
 evidence, lifecycle status, or adapter scope is unknown, the memory is not
 injected into model context.
 

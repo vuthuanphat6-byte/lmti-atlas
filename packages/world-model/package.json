@@ -1,11 +1,12 @@
 {
   "name": "@atlas/world-model",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha.1",
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "dependencies": {
     "@atlas/privacy": "workspace:*",
     "@atlas/types": "workspace:*"
-  }
+  },
+  "license": "Apache-2.0"
 }

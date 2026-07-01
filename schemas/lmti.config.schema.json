@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cyno.software/lmti/schemas/lmti.config.schema.json",
+  "title": "LMTI TOML Config Shape",
+  "type": "object",
+  "required": ["project", "storage", "privacy"],
+  "additionalProperties": false,
+  "properties": {
+    "project": {
+      "type": "object",
+      "required": ["id", "name", "layer"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "layer": { "const": "independent" },
+        "author": { "type": "string" }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "required": ["engine", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "engine": { "const": "sqlite" },
+        "path": { "type": "string", "default": ".lmti/memory.sqlite" }
+      }
+    },
+    "publish": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "public_repo": { "type": "string", "minLength": 1 },
+        "target_branch": { "type": "string", "default": "main" },
+        "allowed_publish_branches": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "required": ["default", "block_secret_output", "block_do_not_prompt"],
+      "additionalProperties": false,
+      "properties": {
+        "default": { "enum": ["public", "internal", "private", "secret", "do_not_prompt"] },
+        "block_secret_output": { "type": "boolean" },
+        "block_do_not_prompt": { "type": "boolean" }
+      }
+    },
+    "thoth": {
+      "type": "object",
+      "required": ["enabled", "registry"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "registry": { "type": "string", "minLength": 1 }
+      }
+    },
+    "agents": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

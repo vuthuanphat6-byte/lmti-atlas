@@ -177,8 +177,8 @@ const LONG_THRESHOLD = 50;
 const GUARDRAIL_THRESHOLD = 35;
 
 const INTENT_LEXICON: Record<MindIntent, string[]> = {
-  code_fix: ["fix", "bug", "error", "failed", "failure", "loi", "loi", "broken", "hotfix", "debug"],
-  feature_build: ["build", "feature", "implement", "add", "upgrade", "nang cap", "create", "support", "architecture"],
+  code_fix: ["fix", "bug", "error", "failed", "failure", "broken", "hotfix", "debug"],
+  feature_build: ["build", "feature", "implement", "add", "upgrade", "create", "support", "architecture"],
   ui_ux: ["ui", "ux", "layout", "screen", "button", "brand", "logo", "modal", "design", "moodboard"],
   deployment: ["deploy", "production", "release", "pm2", "docker", "healthcheck", "rollback", "server", "nginx", "ci"],
   security: ["security", "privacy", "permission", "403", "forbidden", "role", "auth", "token", "secret", "credential", "least privilege"],
@@ -187,7 +187,7 @@ const INTENT_LEXICON: Record<MindIntent, string[]> = {
   memory_system: ["memory", "short memory", "long memory", "mind", "orchestrator", "context", "remember", "lesson", "retrieval"],
   prompt_engineering: ["prompt", "system prompt", "instruction", "persona", "agent prompt", "codex"],
   documentation: ["doc", "docs", "readme", "documentation", "guide", "manual"],
-  contract_document: ["contract", "agreement", "quote", "quotation", "bao gia", "hop dong", "proposal"],
+  contract_document: ["contract", "agreement", "quote", "quotation", "proposal"],
   seo_content: ["seo", "content", "social", "post", "caption", "copywriting", "marketing", "slogan"],
   unknown: []
 };
@@ -1000,8 +1000,6 @@ function normalizeText(value: string): string {
   return value
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
-    .replace(/Ä‘/g, "d")
-    .replace(/Đ/g, "d")
     .toLowerCase();
 }
 

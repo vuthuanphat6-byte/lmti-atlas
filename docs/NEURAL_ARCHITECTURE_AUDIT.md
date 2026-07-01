@@ -1,5 +1,7 @@
 # Architecture Boundary Audit
 
+> Status: Legacy/research documentation
+
 > Historical audit note. The "neural" wording is not current product
 > positioning; the useful part of this document is package-boundary review.
 

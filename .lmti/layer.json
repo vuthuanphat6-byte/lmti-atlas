@@ -14,6 +14,18 @@
   ],
   "naming_note": "LMTI is the public product. ATLAS is a legacy/internal codename and Project Atlas artifact name. @atlas/* packages are internal implementation packages of LMTI during local alpha. The publish repository is vuthuanphat6-byte/lmti-atlas, not a private or legacy /atlas path.",
   "ownership_note": "Created and maintained by Edgar Vu — Cyno Software. LMTI is an independent AI-agent memory/context layer, not an application module.",
+  "publish_safety_gate": {
+    "command": "lmti publish preflight",
+    "required_before": [
+      "push_to_public_repo",
+      "open_pull_request",
+      "create_release",
+      "publish_open_source_artifact",
+      "change_git_remote"
+    ],
+    "blocked_exit_code": 2,
+    "boundary_note": "If publish preflight returns ERROR/BLOCKED, the agent must stop and ask for a safe recovery path."
+  },
   "description": "LMTI is an independent layer attached to this repository to help AI agents understand project context, retrieve memory, index knowledge, capture lessons, and enforce safe operating boundaries. It is not a business module, runtime module, backend service, frontend feature, or product domain component.",
   "runtime_boundary": {
     "part_of_application_runtime": false,

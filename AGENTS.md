@@ -6,7 +6,7 @@
 >
 > **LMTI is not a complete Artificial Mind or a full AI framework.**
 >
-> LMTI is a practical operating memory and verification layer for AI coding agents.
+> LMTI is a practical local memory, safety, and skill-routing layer for AI coding agents.
 >
 > Your responsibility is not simply to implement features.
 > Your responsibility is to preserve the reliability, privacy, and cognitive direction of LMTI.
@@ -51,8 +51,8 @@ LMTI exists to help them:
 
 Every implementation must move the project closer to that goal.
 
-LMTI is not a complete Artificial Mind. LMTI is a practical operating memory
-and verification layer for AI coding agents.
+LMTI is not a complete Artificial Mind. LMTI is a practical local memory,
+safety, and skill-routing layer for AI coding agents.
 
 ---
 
@@ -240,13 +240,13 @@ Everything else is only an implementation detail.
 
 ### Author And Ownership
 
-**Author:** Edgar Vu
+**Author:** Edgar Vu - Cyno Software
 **Organization:** Cyno Software
-**Project:** LMTI — Long Memory / Project Intelligence Layer
+**Project:** LMTI - Long Memory / Project Intelligence Layer
 
-LMTI is created and maintained by **Edgar Vu — Cyno Software**.
+LMTI is created and maintained by **Edgar Vu - Cyno Software**.
 
-LMTI is an independent project intelligence and memory layer for AI Agents. It is connected to the project by context, not by runtime ownership.
+LMTI is an independent local AI memory, safety, and skill-routing layer for AI agents. It is connected to the project by context, not by runtime ownership.
 
 ### LMTI Boundary
 
@@ -290,6 +290,8 @@ Before making changes, Codex should:
 9. Use framework detection before planning build/test/risk steps on unfamiliar projects.
 10. Do not bypass LMTI privacy gates, do not widen permissions to make a task pass, and never print secrets.
 11. Do not store raw chat, raw secrets, raw customer data, or unverified hallucinations as memory.
+12. Before publishing, pushing to a public repo, opening a PR, creating a release, or changing a Git remote, always run `lmti publish preflight`. If it returns ERROR/BLOCKED, stop immediately and ask the user to resolve or approve a safe recovery path.
+13. For the current architecture phase, treat Go as the future core runtime, SQLite as durable memory storage, TOML as human config, and JSON only as the CLI/API boundary. Do not introduce Protobuf, gRPC, or direct agent storage reads in this phase.
 
 Suggested local command:
 
@@ -297,6 +299,7 @@ lmti context "<task>"
 lmti mind context "<task>"
 lmti framework detect
 lmti preflight "<task>" --role developer --model-target external_model
+lmti publish preflight
 lmti memory lesson candidates
 lmti doctor --security
 <!-- LMTI:END -->

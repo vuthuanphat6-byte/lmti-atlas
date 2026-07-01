@@ -144,14 +144,8 @@ export function confidenceToWeight(confidence: MemoryConfidence): number {
 
 export function normalizeMemoryText(value: string): string {
   return value
-    .replace(/l(?:á|Ã¡)»(?:—|�)?i/giu, "loi")
-    .replace(/b(?:á|Ã¡)»(?:‹|�)?/giu, "bi")
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
-    .replace(/đ/g, "d")
-    .replace(/Đ/g, "d")
-    .replace(/Ä‘/g, "d")
-    .replace(/Ä/g, "d")
     .toLowerCase();
 }
 
@@ -235,7 +229,7 @@ function inferBasicIntent(text: string): InferredIntent {
     ["routing", scoreTerms(normalized, ["route", "routing", "redirect", "path", "url", "endpoint"])],
     ["deploy", scoreTerms(normalized, ["deploy", "deployment", "release", "production", "build", "env"])],
     ["debug", scoreTerms(normalized, ["debug", "trace", "error", "exception", "risk"])],
-    ["bugfix", scoreTerms(normalized, ["bug", "fix", "broken", "failure", "loi", "error"])],
+    ["bugfix", scoreTerms(normalized, ["bug", "fix", "broken", "failure", "error"])],
     ["privacy", scoreTerms(normalized, ["privacy", "secret", "confidential", "prompt", "policy"])],
     ["api", scoreTerms(normalized, ["api", "endpoint", "request", "response"])],
     ["database", scoreTerms(normalized, ["database", "schema", "sql", "migration"])],

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cyno.software/lmti/schemas/lmti.adapter.schema.json",
+  "title": "LMTI Adapter Boundary",
+  "type": "object",
+  "required": ["schemaVersion", "id", "agentKind", "storageAccess", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "lmti.adapter.v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "agentKind": { "enum": ["codex", "claude_code", "cursor", "cline", "cli_agent", "custom"] },
+    "storageAccess": { "const": "core_runtime_only" },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "enum": ["detect", "memory_retrieve", "record_action", "record_outcome", "publish_preflight", "doctor"]
+      },
+      "uniqueItems": true
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxPrivacy": { "enum": ["public", "internal", "private", "secret", "do_not_prompt"] },
+        "allowRawSecret": { "const": false },
+        "allowDirectStorageRead": { "const": false }
+      }
+    }
+  }
+}

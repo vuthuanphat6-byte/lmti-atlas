@@ -13,17 +13,18 @@ secrets/
 credentials/
 
 # Local runtime data
-.lmti/*
-!.lmti/
-!.lmti/layer.json
-!.lmti/README.md
-!.lmti/AGENT_BOUNDARY.md
+.lmti/
 .atlas/
 .agents/
 .codex/
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 logs/
 tmp/
+.tmp/
 temp/
 .cache/
 coverage/

@@ -225,7 +225,7 @@ function inferIntentLabel(task: string, items: CognitiveContextItem[]): string {
   if (corpus.includes("deploy")) {
     return "deploy";
   }
-  if (corpus.includes("bug") || corpus.includes("error") || corpus.includes("loi")) {
+  if (corpus.includes("bug") || corpus.includes("error")) {
     return "debug";
   }
   return "unknown";

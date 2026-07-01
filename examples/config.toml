@@ -1,0 +1,32 @@
+[project]
+id = "lmti-atlas"
+name = "LMTI Atlas"
+layer = "independent"
+author = "Edgar Vu - Cyno Software"
+
+[storage]
+engine = "sqlite"
+path = ".lmti/memory.sqlite"
+
+[publish]
+public_repo = "https://github.com/vuthuanphat6-byte/lmti-atlas.git"
+target_branch = "main"
+allowed_publish_branches = ["main", "release/*", "publish/*"]
+
+[privacy]
+default = "internal"
+block_secret_output = true
+block_do_not_prompt = true
+
+[thoth]
+enabled = true
+registry = "skills/registry.toml"
+
+[agents.codex]
+enabled = true
+
+[agents.cursor]
+enabled = true
+
+[agents.claude_code]
+enabled = true

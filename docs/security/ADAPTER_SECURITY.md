@@ -1,5 +1,7 @@
 # Adapter Security
 
+> Status: Security documentation
+
 Date: 2026-06-29
 
 Adapters are untrusted sinks unless explicitly proven local and policy-safe.

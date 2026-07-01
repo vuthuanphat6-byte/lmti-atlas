@@ -1,64 +1,92 @@
 # Security Policy
 
-LMTI handles project memory, context routing, and privacy gates for AI coding
-agents. Security reports are taken seriously, especially anything that can leak
-private project knowledge into an agent prompt.
+LMTI Atlas handles local project memory, context routing, privacy gates, and
+agent-facing command output. Security reports are important because a bug can
+leak private project knowledge into a prompt, log, package, or public repo.
+
+## Supported Versions
+
+| Version | Support Status |
+|---|---|
+| `0.1.0-alpha.1` | Local-alpha security fixes on the default branch. |
+| Earlier versions | Not supported. |
+
+There are no stable long-term support branches yet.
 
 ## Reporting A Vulnerability
 
-If GitHub private vulnerability reporting is enabled for this repository, use
-that channel.
+If GitHub private vulnerability reporting is enabled, use it.
 
-If private reporting is not available yet, open a minimal public issue that says
-you have a security report, but do not include exploit details, secrets, tokens,
-private paths, customer data, or raw memory content. The maintainer should then
+If private reporting is not available, open a minimal public issue that says a
+security report exists. Do not include exploit details, tokens, private paths,
+customer data, raw memory, or logs with secrets. The maintainer should then
 provide a private contact path.
 
-TODO: Publish an official security contact before public release.
+TODO: Publish an official private security contact before broad public release.
 
-## Do Not Include Secrets
+## Security Principles
 
-Never include real secrets in a report:
+- Local-first by default.
+- Least privilege for tools, adapters, and model targets.
+- Privacy gates before memory enters agent context.
+- Redaction before safe CLI output where the privacy layer is used.
+- Memory is prior belief, not source of truth.
+- Publish gates reduce release risk but do not replace human review.
 
-- API keys or access tokens.
-- Passwords or session cookies.
-- Private keys or certificates.
-- Database URLs.
-- `.env` contents.
-- Private customer, server, or deployment details.
+LMTI reduces leakage risk. It does not replace source-code verification, tests,
+dedicated secret scanning, dependency review, or human security review.
 
-Use placeholders such as `example_token_do_not_use` when describing a class of
-issue.
+## Local State And Secrets
 
-## Security Scope
+Local runtime state can include sensitive knowledge. Treat `.lmti/` and legacy
+`.atlas/` state as private unless a maintainer has reviewed the exact files.
 
-Useful security reports include:
+Sensitive examples include:
+
+- Memory databases and JSON memory exports.
+- Project Atlas / AMF output.
+- Privacy audit logs.
+- Action traces.
+- Context packs.
+- Private prompts and private deployment notes.
+
+## What Not To Commit
+
+[CẢNH BÁO BẢO MẬT] Do not commit:
+
+- `.env` or `.env.*` files, except safe examples such as `.env.example`.
+- API keys, access tokens, passwords, cookies, or session material.
+- Private keys, certificates, signing keys, or generated credentials.
+- Database URLs and production connection strings.
+- SQLite databases, `.db` files, or local memory stores.
+- Raw `.lmti/` runtime state or legacy `.atlas/` runtime state.
+- Customer data, private prompts, deployment details, or internal server names.
+- Sanitized-looking logs that still contain tokens, paths, or customer data.
+
+Use obvious placeholders such as `example_token_do_not_use` when documenting a
+class of issue.
+
+## Useful Security Reports
+
+Useful reports include:
 
 - Secret leakage through context, preflight, adapters, CLI output, or logs.
 - Privacy gate bypasses.
 - Unsafe context export to external model targets.
 - Path traversal or unsafe file access.
 - Compiler reads outside the intended project boundary.
-- Destructive `doctor`, `compile`, `preflight`, or migration behavior.
+- Destructive behavior in doctor, compile, preflight, publish, or migration
+  commands.
 - Adapter manifest sandbox bypasses.
 - Raw memory exposure through MCP, runtime, or action replay paths.
 - Cross-project memory contamination.
+- Publish preflight false negatives for protected files or unsafe remotes.
 
-## Supported Versions
+## Limitations
 
-LMTI is in Local Alpha. There are no supported stable release lines yet.
-
-Security fixes currently target the default branch until the project publishes a
-versioned release policy.
-
-## Responsible Disclosure
-
-Please give maintainers reasonable time to investigate before public disclosure.
-For high-impact issues, include:
-
-- A minimal reproduction.
-- The command or API used.
-- Expected safe behavior.
-- Actual unsafe behavior.
-- Whether the issue affects prompt/context export.
-- Sanitized logs without secrets.
+- LMTI is local alpha software.
+- Some command families are experimental.
+- The Go core path is not fully verified on machines without a Go toolchain.
+- Secret detection is best effort and can miss novel formats.
+- Human review is still required before publishing, opening PRs, changing
+  remotes, or sharing generated context with external systems.

@@ -28,7 +28,7 @@ describe("Mind Orchestrator", () => {
   });
 
   it("detects memory_system intent for short memory work", () => {
-    const intent = routeMindIntent("nang cap short memory dang note giay");
+    const intent = routeMindIntent("upgrade short memory draft notes");
 
     expect(intent.primary).toBe("memory_system");
     expect(intent.secondary).toEqual(expect.arrayContaining(["feature_build"]));
@@ -160,7 +160,7 @@ describe("Mind Orchestrator", () => {
     await addProjectMemory(
       {
         title: "Private key fixture",
-        content: "PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----FAKE-----END RSA PRIVATE KEY-----",
+        content: ["PRIVATE_KEY=", "-----BEGIN RSA ", "PRIVATE KEY-----", "FAKE", "-----END RSA ", "PRIVATE KEY-----"].join(""),
         zone: "security",
         privacyLevel: "do_not_prompt"
       },

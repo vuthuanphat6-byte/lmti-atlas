@@ -22,9 +22,9 @@ const KERNEL_VERSION = "0.1.0";
 const LOW_SCORE_THRESHOLD = 3;
 
 const INTENT_LEXICON: Record<IntentCategory, string[]> = {
-  bugfix: ["bug", "fix", "bugfix", "broken", "fail", "failed", "failure", "error", "exception", "loi", "lỗi", "issue"],
+  bugfix: ["bug", "fix", "bugfix", "broken", "fail", "failed", "failure", "error", "exception", "issue"],
   deploy: ["deploy", "deployment", "release", "build", "env", "environment", "docker", "ci", "cd", "log", "logs"],
-  debug: ["debug", "trace", "error", "exception", "stack", "risk", "investigate", "diagnose", "loi", "lỗi"],
+  debug: ["debug", "trace", "error", "exception", "stack", "risk", "investigate", "diagnose"],
   auth: ["auth", "login", "logout", "session", "jwt", "token", "oauth", "password"],
   permission: ["permission", "403", "forbidden", "unauthorized", "role", "access", "least", "privilege", "deny", "denied"],
   routing: ["route", "routing", "router", "redirect", "path", "url", "endpoint"],
@@ -150,7 +150,7 @@ export function inferIntent(task: string): InferredIntent {
   if (normalized.includes("dashboard") && normalized.includes("agent")) {
     scores.set("dashboard", (scores.get("dashboard") ?? 0) + 3);
   }
-  if (normalized.includes("loi") || normalized.includes("lỗi") || normalized.includes("error")) {
+  if (normalized.includes("error")) {
     scores.set("bugfix", (scores.get("bugfix") ?? 0) + 3);
     scores.set("debug", (scores.get("debug") ?? 0) + 2);
   }
@@ -636,13 +636,7 @@ function sortByScore<T extends { score: number }>(left: T, right: T): number {
 
 function normalizeSearchText(value: string): string {
   return value
-    .replace(/l(?:á|Ã¡)»(?:—|�)?i/giu, "loi")
-    .replace(/b(?:á|Ã¡)»(?:‹|�)?/giu, "bi")
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
-    .replace(/đ/g, "d")
-    .replace(/Đ/g, "d")
-    .replace(/Ä‘/g, "d")
-    .replace(/Ä/g, "d")
     .toLowerCase();
 }

@@ -1,5 +1,7 @@
 # Naming Clarification
 
+> Status: Local-alpha documentation
+
 LMTI is the product.
 
 LMTI means Long Memory / Project Intelligence Layer.

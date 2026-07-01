@@ -1,37 +1,48 @@
 # Contributing
 
-Thanks for considering a contribution to LMTI.
+Thanks for considering a contribution to LMTI Atlas.
 
-LMTI is currently a local-alpha project focused on one practical goal: safe
-project memory and verification for AI coding agents, with Codex as the first
-workflow. Contributions should make that workflow easier to understand, safer,
-or more reliable.
+LMTI is a local-alpha project focused on safe project memory, context routing,
+privacy gates, and verification support for AI coding agents. Contributions
+should make that workflow easier to understand, safer, or more reliable.
 
-## Local Setup
+## How To Contribute
+
+- Pick a focused issue or small documentation gap.
+- Keep changes scoped to one behavior, package, or document area.
+- Explain what changed, why it matters, and how it was verified.
+- Update docs when CLI commands, privacy behavior, storage, or output schemas
+  change.
+- Mark roadmap or experimental work honestly.
+
+Do not present planned or experimental features as stable product capability.
+
+## Development Setup
 
 Requirements:
 
-- Node.js 20 or newer.
+- Node.js 24 for the current full test path.
 - Corepack with pnpm.
-- For SQLite-backed project memory commands, a Node runtime that provides
-  `node:sqlite`; this path is currently tested on Node 24.
+- Git.
+- Optional: Go, only when working on the experimental Go core.
 
 Install dependencies:
 
 ```bash
-corepack pnpm install
+corepack enable
+pnpm install
 ```
 
 Build:
 
 ```bash
-corepack pnpm build
+pnpm build
 ```
 
 Run tests:
 
 ```bash
-corepack pnpm test
+pnpm test
 ```
 
 Run the CLI from source:
@@ -39,69 +50,88 @@ Run the CLI from source:
 ```bash
 node packages/cli/dist/index.js --help
 node packages/cli/dist/index.js doctor
-node packages/cli/dist/index.js compile ./examples/sample-project
-node packages/cli/dist/index.js context "fix packing label bug"
-node packages/cli/dist/index.js preflight "permission routing issue" --role developer --model-target external_model
+node packages/cli/dist/index.js publish check
 ```
 
-There is no separate root `typecheck` script today. `corepack pnpm build` is
-the current TypeScript verification command.
-
-## Branch And PR Expectations
-
-- Keep PRs focused on one behavior or documentation area.
-- Explain why the change is needed and what user workflow it improves.
-- Call out privacy, memory, context, adapter, or security impact.
-- Update docs when CLI commands, privacy behavior, or output shape changes.
-- Do not claim production, enterprise, cloud, or all-agent support unless the
-  code and tests prove it.
-
-## Tests
-
-Add or update tests when changing:
-
-- Memory retrieval, scoring, lifecycle, or lesson capture.
-- Privacy gates, redaction, egress scan, or audit output.
-- Context Pack or preflight output.
-- Adapter manifests, sandbox rules, or model-target handling.
-- CLI command behavior.
-- Compiler source-boundary rules.
-
-At minimum, run:
+After build, root scripts also work:
 
 ```bash
-corepack pnpm build
-corepack pnpm test
+pnpm lmti doctor
+pnpm lmti publish check
 ```
 
-## Secret Hygiene
+Future global usage should look like `lmti doctor`, but release verification
+must use the source path or a deliberately linked local package.
 
-Never commit real secrets.
+## Branch Naming
+
+Use short, descriptive branch names:
+
+- `docs/readme-alpha`
+- `fix/privacy-egress-scan`
+- `feat/publish-check-warning`
+- `test/memory-retrieval-gates`
+
+Avoid branch names that include customer names, private server names, secrets,
+or issue details that should remain private.
+
+## Commit Style
+
+Use clear, imperative commits:
+
+```text
+docs: clarify alpha CLI status
+fix: block secret memory from context output
+test: cover publish preflight dirty tree
+```
+
+Keep generated files out of commits unless they are required source artifacts.
+
+## Pull Request Checklist
+
+Before opening a PR:
+
+- `pnpm build` passes.
+- `pnpm test` passes, or the PR explains why a test cannot run.
+- `node packages/cli/dist/index.js publish check` has been reviewed.
+- Security, privacy, memory, storage, and adapter risks are called out.
+- Docs match current behavior.
+- New commands have human and agent-facing behavior documented.
+- JSON output changes preserve schema/version expectations or document the
+  migration.
+- No secrets or private local state are included.
+
+## Security Rules
+
+[CẢNH BÁO BẢO MẬT] Never commit real secrets or private local state.
 
 Do not commit:
 
 - `.env` or `.env.*` files, except safe examples such as `.env.example`.
-- API keys, tokens, passwords, cookies, sessions, certificates, or private keys.
+- API keys, tokens, passwords, cookies, or sessions.
+- Private keys, certificates, or signing material.
 - Database URLs or production connection strings.
-- Local `.lmti/` memory databases, action logs, or private project state.
-- Customer, server, deployment, or internal business details that are not meant
-  for a public repository.
+- SQLite databases, local memory stores, action logs, or raw `.lmti/` runtime
+  state.
+- Customer data, private prompts, private deployment notes, or server details.
 
 Fixtures must use obvious placeholders such as `FAKE_TEST_TOKEN_VALUE` or
-`your_api_key_here`. If a real secret was committed, rotate it before opening a
-PR.
+`your_api_key_here`. If a real secret reaches Git history, rotate it before
+publishing or opening a PR.
 
-## Documentation Style
+Security-sensitive changes should prefer least privilege, explicit validation,
+safe output rendering, and clear failure states.
 
-Use direct, practical language:
+## Documentation Rules
 
 - Say what exists today.
-- Mark roadmap items as roadmap.
-- Keep broader AI-system language as long-term vision, not current product claims.
-- Prefer command examples that work from source.
-- Avoid raw private paths, private deployment flows, or customer-specific notes.
+- Mark experimental features as experimental.
+- Mark planned features as planned.
+- Prefer source-based commands until package distribution is verified.
+- Keep LMTI framed as local project memory and safety support, not a complete AI
+  framework.
+- Explain privacy boundaries without printing raw secrets, raw memory, or
+  customer data.
 
-## Issues
-
-Use the GitHub issue templates when available. For security issues, do not open
-a public issue with exploit details or secrets; follow [SECURITY.md](SECURITY.md).
+For security reports, follow [SECURITY.md](SECURITY.md) instead of opening a
+public issue with exploit details.

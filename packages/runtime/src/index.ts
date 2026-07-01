@@ -376,7 +376,7 @@ export function createDefaultRuntime(config: RuntimeConfig = {}): CoreRuntime {
 
 function extractRememberedContent(message: string): string | undefined {
   const normalized = normalizeSearchText(message);
-  const markers = ["remember that", "remember", "nho rang", "hay nho rang"];
+  const markers = ["remember that", "remember"];
 
   for (const marker of markers) {
     const index = normalized.indexOf(marker);
@@ -391,21 +391,21 @@ function extractRememberedContent(message: string): string | undefined {
 
 function isAuditLogIntent(message: string): boolean {
   const normalized = normalizeSearchText(message);
-  return normalized.includes("audit log") && /\b(chay|run|doc|read|show|xem)\b/i.test(normalized);
+  return normalized.includes("audit log") && /\b(run|read|show)\b/i.test(normalized);
 }
 
 function isDatabaseDeleteIntent(message: string): boolean {
   const normalized = normalizeSearchText(message);
-  const hasDelete = /\b(xoa|delete|remove|drop|clear)\b/i.test(normalized);
-  const hasDatabase = /\b(database|db|co so du lieu)\b/i.test(normalized);
-  const hasWideScope = /\b(toan bo|all|everything|entire|whole|tat ca)\b/i.test(normalized);
+  const hasDelete = /\b(delete|remove|drop|clear)\b/i.test(normalized);
+  const hasDatabase = /\b(database|db)\b/i.test(normalized);
+  const hasWideScope = /\b(all|everything|entire|whole)\b/i.test(normalized);
   return hasDelete && hasDatabase && hasWideScope;
 }
 
 function isProjectRecallIntent(message: string): boolean {
   const normalized = normalizeSearchText(message);
-  const asksProject = /\b(du an|project)\b/i.test(normalized);
-  const asksWhat = /\b(gi|what|dang lam|la)\b/i.test(normalized);
+  const asksProject = /\b(project)\b/i.test(normalized);
+  const asksWhat = /\b(what|working on|is)\b/i.test(normalized);
   return asksProject && asksWhat;
 }
 
@@ -415,11 +415,6 @@ function formatProjectMemoryAnswer(content?: string): string | undefined {
   }
 
   const trimmed = content.trim().replace(/\s+\.$/, ".");
-  const match = /^dự án này là\s+(.+)$/i.exec(trimmed);
-  if (match?.[1]) {
-    return ensureSentence(`Project ${match[1].trim()}`);
-  }
-
   return ensureSentence(trimmed.charAt(0).toUpperCase() + trimmed.slice(1));
 }
 
@@ -443,7 +438,5 @@ function normalizeSearchText(value: string): string {
   return value
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
-    .replace(/đ/g, "d")
-    .replace(/Đ/g, "d")
     .toLowerCase();
 }

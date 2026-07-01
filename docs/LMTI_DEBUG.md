@@ -1,5 +1,7 @@
 # LMTI Debug Guide
 
+> Status: Local-alpha documentation
+
 LMTI is a local project memory/context layer for AI coding agents. Treat it as advisory context. Source code, tests and command output remain the verification source.
 
 ## Run Locally

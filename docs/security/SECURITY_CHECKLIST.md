@@ -1,5 +1,7 @@
 # Security Checklist
 
+> Status: Security documentation
+
 Date: 2026-06-29
 
 Use this checklist before release or before enabling a new adapter/tool.

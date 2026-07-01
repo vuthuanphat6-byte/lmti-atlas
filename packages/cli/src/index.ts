@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -76,6 +77,7 @@ import {
   doctorLmti,
   formatDoctorReport,
   formatMigrationResult,
+  type DoctorSeverity,
   migrateAtlasToLmti,
   type DoctorReport,
   type MigrationResult
@@ -180,6 +182,129 @@ const DEFAULT_ADAPTER_PRIVACY_PROFILE: AdapterPrivacyProfile = {
 
 const KNOWN_ADAPTERS = new Set(["codex", "claude-code", "cursor", "aider", "continue", "mcp", "openai-agents", "langchain", "crewai", "autogen", "generic", "custom"]);
 
+const DEFAULT_PUBLISH_TARGET_BRANCH = "main";
+const DEFAULT_PUBLISH_ALLOWED_BRANCHES = ["main", "release/*", "publish/*", "publish-*"];
+const DEFAULT_PRIVATE_REPO_PATTERNS = ["/atlas", "private", "internal"];
+const DEFAULT_PROTECTED_PUBLISH_PATHS = [
+  ".env",
+  ".env.*",
+  ".lmti/memory/*.sqlite",
+  ".lmti/private/**",
+  "**/secrets/**",
+  "**/*.pem",
+  "**/*.key",
+  "**/*.p12",
+  "**/*.pfx"
+];
+
+type PublishPreflightStatus = "pass" | "warn" | "error";
+type PublishPreflightResultState = "pass" | "warning" | "blocked";
+
+export interface PublishPreflightCheck {
+  name: string;
+  title: string;
+  status: PublishPreflightStatus;
+  message: string;
+  fix?: string;
+}
+
+export interface PublishPreflightResult {
+  command: "lmti publish preflight";
+  result: PublishPreflightResultState;
+  exitCode: 0 | 1 | 2;
+  targetRepo?: string;
+  currentOrigin?: string;
+  currentBranch?: string;
+  targetBranch: string;
+  checks: PublishPreflightCheck[];
+  next: string;
+  configSources: string[];
+}
+
+interface CliBoundaryMessage {
+  code: string;
+  message: string;
+  suggestion?: string;
+}
+
+type CliStatus = "pass" | "warn" | "blocked" | "error";
+type CliExitCode = 0 | 1 | 2 | 3 | 4 | 5;
+
+interface CliJsonEnvelope {
+  schemaVersion: "lmti.cli.v1";
+  command: string;
+  status: CliStatus;
+  warnings: CliBoundaryMessage[];
+  errors: CliBoundaryMessage[];
+  data: unknown;
+}
+
+interface LmtiSkillDefinition {
+  id: string;
+  name: string;
+  description: string;
+  file: string;
+  intents: string[];
+  requiresPolicy: boolean;
+  requiresMemory: boolean;
+  riskLevel: "low" | "medium" | "high" | string;
+}
+
+interface LmtiSkillRouteOutcome {
+  status: CliStatus;
+  warnings: CliBoundaryMessage[];
+  errors: CliBoundaryMessage[];
+  result: {
+    request: string;
+    intent: string;
+    decision: "skill_selected" | "multiple_candidates" | "no_skill_found" | "invalid_registry";
+    selectedSkill?: {
+      id: string;
+      name: string;
+      file: string;
+      riskLevel: string;
+    };
+    candidates: Array<{
+      id: string;
+      score: number;
+      intent: string;
+      riskLevel: string;
+      reason: string;
+    }>;
+    secondarySkills: Array<{ id: string; reason: string }>;
+    requiresPolicy: boolean;
+    requiresMemory: boolean;
+    requiredPolicyGates: string[];
+    recommendedCommands: string[];
+    memoryRequest?: {
+      intent: string;
+      privacyMax: "public" | "internal";
+      includeLessons: boolean;
+      includeRelatedFiles: boolean;
+    };
+    reason: string;
+  };
+}
+
+class CliUsageError extends Error {
+  readonly exitCode = 4 as const;
+}
+
+interface PublishPreflightOptions {
+  target?: string;
+  strict?: boolean;
+  publicRepo?: string;
+}
+
+interface PublishPreflightConfig {
+  publicRepo?: string;
+  privateRepoPatterns: string[];
+  targetBranch: string;
+  allowedPublishBranches: string[];
+  protectedPaths: string[];
+  sources: string[];
+}
+
 export interface CliMainOptions {
   cwd?: string;
 }
@@ -191,6 +316,12 @@ export async function main(argv: string[], options: CliMainOptions = {}): Promis
   switch (command) {
     case "init":
       await runInit(args);
+      return;
+    case "check":
+      await runDoctor(args);
+      return;
+    case "route":
+      await runSkill(["route", ...args], cwd);
       return;
     case "compile":
       await runCompile(args);
@@ -208,7 +339,28 @@ export async function main(argv: string[], options: CliMainOptions = {}): Promis
       await runContext(args);
       return;
     case "preflight":
-      await runPreflight(args);
+      await runPreflight(args, cwd);
+      return;
+    case "publish":
+      await runPublish(args, cwd);
+      return;
+    case "skill":
+      await runSkill(args, cwd);
+      return;
+    case "thoth":
+      await runThoth(args, cwd);
+      return;
+    case "policy":
+      await runPolicy(args, cwd);
+      return;
+    case "config":
+      await runConfig(args, cwd);
+      return;
+    case "agent":
+      await runAgent(args, cwd);
+      return;
+    case "cleanup":
+      await runCleanup(args, cwd);
       return;
     case "attach":
       await runAttach(args);
@@ -253,7 +405,8 @@ export async function main(argv: string[], options: CliMainOptions = {}): Promis
       printHelp();
       return;
     default:
-      throw new Error(`Unknown command: ${command}`);
+      process.exitCode = 4;
+      throw new CliUsageError(`Unknown command: ${command}`);
   }
 }
 
@@ -391,10 +544,23 @@ export async function migrateCommand(cwd: string, options: { yes?: boolean } = {
 async function runDoctor(args: string[]): Promise<void> {
   const { flags } = parseArgs(args);
   if (flags.security) {
-    printSafeJson(await doctorSecurityCommand(process.cwd()), "doctor security");
+    const report = await doctorSecurityCommand(process.cwd());
+    if (flags.json) {
+      const status = report.status === "pass" ? "pass" : report.status === "warn" ? "warn" : "blocked";
+      setCliExitCode(status);
+      printCliEnvelope("lmti.doctor.security", status, securityDoctorMessages(report, "warn"), securityDoctorMessages(report, "fail"), report);
+      return;
+    }
+    printSafeJson(report, "doctor security");
     return;
   }
   const report = await doctorCommand(process.cwd(), { fix: Boolean(flags.fix) });
+  if (flags.json) {
+    const status = doctorStatusToCliStatus(report.status);
+    setCliExitCode(status);
+    printCliEnvelope("lmti.doctor", status, doctorProblemMessages(report, "warning"), doctorProblemMessages(report, "error"), report);
+    return;
+  }
   console.log(formatDoctorReport(report));
 }
 
@@ -595,7 +761,12 @@ export async function contextCommand(
   });
 }
 
-async function runPreflight(args: string[]): Promise<void> {
+async function runPreflight(args: string[], cwd = process.cwd()): Promise<void> {
+  if (args[0] === "publish") {
+    await runPublishPreflight(args.slice(1), cwd);
+    return;
+  }
+
   if (args.length === 0) {
     throw new Error('Usage: lmti preflight "<task>" [amfPath] [--role developer] [--model-target external_model]');
   }
@@ -605,8 +776,359 @@ async function runPreflight(args: string[]): Promise<void> {
   const amfPath = positional[1];
   const role = parseRole(stringFlag(flags, "role") ?? "developer");
   const modelTarget = stringFlag(flags, "model-target");
-  const result = await preflightCommand(process.cwd(), task, { amfPath, role, modelTarget, flags });
+  const result = await preflightCommand(cwd, task, { amfPath, role, modelTarget, flags });
   printSafeJson(result, "preflight");
+}
+
+async function runPublish(args: string[], cwd = process.cwd()): Promise<void> {
+  const [subcommand, ...rest] = args;
+  if (subcommand === "preflight" || subcommand === "check") {
+    await runPublishPreflight(rest, cwd);
+    return;
+  }
+  throw new CliUsageError("Usage: lmti publish <check|preflight> [--target main] [--json] [--strict] [--fix-suggest]");
+}
+
+async function runPublishPreflight(args: string[], cwd = process.cwd()): Promise<void> {
+  const { flags } = parseArgs(args);
+  const result = await publishPreflightCommand(cwd, {
+    target: stringFlag(flags, "target"),
+    strict: Boolean(flags.strict)
+  });
+
+  process.exitCode = result.exitCode;
+  if (flags.json) {
+    printSafeJson(createPublishEnvelope(result), "publish preflight");
+    return;
+  }
+  printSafeText(formatPublishPreflight(result, { fixSuggest: Boolean(flags["fix-suggest"]) }));
+}
+
+async function runSkill(args: string[], cwd = process.cwd()): Promise<void> {
+  const [subcommand, ...rest] = args;
+  switch (subcommand) {
+    case "list":
+      await runSkillList(rest, cwd, "lmti.skill.list");
+      return;
+    case "route":
+      await runSkillRoute(rest, cwd, "lmti.skill.route");
+      return;
+    case "show":
+      await runSkillShow(rest, cwd, "lmti.skill.show");
+      return;
+    case "validate":
+      await runSkillValidate(rest, cwd, "lmti.skill.validate");
+      return;
+    case "help":
+    case "--help":
+    case undefined:
+      printSkillHelp();
+      return;
+    default:
+      throw new CliUsageError("Usage: lmti skill <list|route|show|validate> [--json]");
+  }
+}
+
+async function runThoth(args: string[], cwd = process.cwd()): Promise<void> {
+  const [subcommand, ...rest] = args;
+  switch (subcommand) {
+    case "list":
+      await runSkillList(rest, cwd, "lmti.thoth.list");
+      return;
+    case "route":
+      await runSkillRoute(rest, cwd, "lmti.thoth.route");
+      return;
+    case "show":
+      await runSkillShow(rest, cwd, "lmti.thoth.show");
+      return;
+    case "validate":
+      await runSkillValidate(rest, cwd, "lmti.thoth.validate");
+      return;
+    case "explain":
+      await runThothExplain(rest, cwd);
+      return;
+    case "inspect":
+      await runThothInspect(rest, cwd);
+      return;
+    case "doctor":
+      await runThothDoctor(rest, cwd);
+      return;
+    case "help":
+    case "--help":
+    case undefined:
+      printThothHelp();
+      return;
+    default:
+      throw new CliUsageError("Usage: lmti thoth <list|route|explain|show|inspect|validate|doctor> [--json]");
+  }
+}
+
+async function runSkillList(args: string[], cwd: string, commandName: string): Promise<void> {
+  const { flags } = parseArgs(args);
+  const registry = await readSkillRegistry(cwd);
+  if (flags.json) {
+    printCliEnvelope(commandName, "pass", [], [], { skills: registry });
+    return;
+  }
+  const lines = [
+    "LMTI Skills",
+    "",
+    "| Skill | Intent | Risk | Policy | Memory |",
+    "|---|---|---|---|---|",
+    ...registry.map((skill) => `| ${skill.id} | ${skill.intents.join(", ")} | ${skill.riskLevel} | ${skill.requiresPolicy ? "yes" : "no"} | ${skill.requiresMemory ? "yes" : "no"} |`)
+  ];
+  printSafeText(lines.join("\n"));
+}
+
+async function runSkillRoute(args: string[], cwd: string, commandName: string): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const request = positional.join(" ").trim();
+  if (!request) {
+    writeCliUsage(commandName, `Usage: ${commandName.replace(/\./gu, " ")} "<task>" [--json]`, Boolean(flags.json));
+    return;
+  }
+  const outcome = await routeSkillCommand(cwd, request);
+  setCliExitCode(outcome.status);
+  if (flags.json) {
+    printCliEnvelope(commandName, outcome.status, outcome.warnings, outcome.errors, outcome.result);
+    return;
+  }
+  printSkillRoute(outcome);
+}
+
+async function runSkillShow(args: string[], cwd: string, commandName: string): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const id = positional[0];
+  if (!id) {
+    writeCliUsage(commandName, `Usage: ${commandName.replace(/\./gu, " ")} <skill-id> [--json]`, Boolean(flags.json));
+    return;
+  }
+  const result = await loadSkillContentCommand(cwd, id);
+  setCliExitCode(result.status);
+  if (flags.json) {
+    printCliEnvelope(commandName, result.status, result.warnings, result.errors, result.data);
+    return;
+  }
+  if (result.errors.length > 0) {
+    printSafeText(result.errors.map((error) => `${error.code}: ${error.message}`).join("\n"));
+    return;
+  }
+  printSafeText(result.data.content);
+}
+
+async function runSkillValidate(args: string[], cwd: string, commandName: string): Promise<void> {
+  const { flags } = parseArgs(args);
+  const report = await validateSkillsCommand(cwd);
+  setCliExitCode(report.status);
+  if (flags.json) {
+    printCliEnvelope(commandName, report.status, report.warnings, report.errors, report.data);
+    return;
+  }
+  const lines = [
+    "LMTI Skill Validation",
+    "",
+    "| Check | Status | Detail |",
+    "|---|---|---|",
+    ...report.data.checks.map((check) => `| ${check.check} | ${check.status.toUpperCase()} | ${check.detail.replace(/\|/gu, "\\|")} |`),
+    "",
+    `Result: ${report.status.toUpperCase()}`
+  ];
+  printSafeText(lines.join("\n"));
+}
+
+async function runThothExplain(args: string[], cwd: string): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const request = positional.join(" ").trim();
+  if (!request) {
+    writeCliUsage("lmti.thoth.explain", 'Usage: lmti thoth explain "<task>" [--json]', Boolean(flags.json));
+    return;
+  }
+  const outcome = await routeSkillCommand(cwd, request);
+  const explanation = {
+    request,
+    selectedSkill: outcome.result.selectedSkill?.id,
+    intent: outcome.result.intent,
+    why: outcome.result.reason,
+    recommendedFlow: outcome.result.recommendedCommands
+  };
+  setCliExitCode(outcome.status);
+  if (flags.json) {
+    printCliEnvelope("lmti.thoth.explain", outcome.status, outcome.warnings, outcome.errors, explanation);
+    return;
+  }
+  printSafeText([
+    "LMTI Thoth Explain",
+    "",
+    `Intent: ${explanation.intent}`,
+    `Selected skill: ${explanation.selectedSkill ?? "none"}`,
+    `Why: ${explanation.why}`,
+    "",
+    "Recommended flow:",
+    ...explanation.recommendedFlow.map((step, index) => `${index + 1}. ${step}`)
+  ].join("\n"));
+}
+
+async function runThothInspect(args: string[], cwd: string): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const id = positional[0];
+  if (!id) {
+    writeCliUsage("lmti.thoth.inspect", "Usage: lmti thoth inspect <skill-id> [--json]", Boolean(flags.json));
+    return;
+  }
+  const registry = await readSkillRegistry(cwd);
+  const skill = registry.find((item) => item.id === id);
+  const status: CliStatus = skill ? "pass" : "error";
+  const errors = skill ? [] : [{ code: "THOTH_SKILL_NOT_FOUND", message: "Skill id was not found in skills/registry.toml." }];
+  setCliExitCode(status);
+  if (flags.json) {
+    printCliEnvelope("lmti.thoth.inspect", status, [], errors, { skill });
+    return;
+  }
+  printSafeText(skill ? [`Skill: ${skill.id}`, `File: ${skill.file}`, `Risk: ${skill.riskLevel}`, `Intents: ${skill.intents.join(", ")}`].join("\n") : errors[0].message);
+}
+
+async function runThothDoctor(args: string[], cwd: string): Promise<void> {
+  const { flags } = parseArgs(args);
+  const report = await validateSkillsCommand(cwd);
+  setCliExitCode(report.status);
+  if (flags.json) {
+    printCliEnvelope("lmti.thoth.doctor", report.status, report.warnings, report.errors, report.data);
+    return;
+  }
+  printSafeText(`LMTI Thoth Doctor\n\nResult: ${report.status.toUpperCase()}\nSkills checked: ${report.data.skillsChecked}`);
+}
+
+async function runPolicy(args: string[], cwd = process.cwd()): Promise<void> {
+  const [subcommand, ...rest] = args;
+  const { flags } = parseArgs(rest);
+  if (subcommand === "list") {
+    const data = {
+      decisions: ["allow", "warn", "block", "require_user_approval"],
+      highRiskActions: ["publish", "deploy", "migration", "memory_export", "destructive_cleanup"]
+    };
+    if (flags.json) {
+      printCliEnvelope("lmti.policy.list", "pass", [], [], data);
+      return;
+    }
+    printSafeText(["LMTI Policy Actions", "", ...data.highRiskActions.map((action) => `- ${action}`)].join("\n"));
+    return;
+  }
+  if (subcommand !== "check") {
+    throw new CliUsageError("Usage: lmti policy <check|list> [--action publish] [--json]");
+  }
+  const action = stringFlag(flags, "action");
+  if (!action) {
+    writeCliUsage("lmti.policy.check", "Usage: lmti policy check --action <action> [--path <path>] [--json]", Boolean(flags.json));
+    return;
+  }
+  const result = evaluatePolicyAction(action, parseCsv(stringFlag(flags, "path") ?? stringFlag(flags, "paths")), cwd);
+  setCliExitCode(result.status);
+  if (flags.json) {
+    printCliEnvelope("lmti.policy.check", result.status, result.warnings, result.errors, result.data);
+    return;
+  }
+  printSafeText(`LMTI Policy Check\n\nAction: ${action}\nDecision: ${result.data.decision}\nResult: ${result.status.toUpperCase()}`);
+}
+
+async function runConfig(args: string[], cwd = process.cwd()): Promise<void> {
+  const [subcommand, ...rest] = args;
+  const { flags } = parseArgs(rest);
+  if (!["show", "inspect", "validate"].includes(subcommand ?? "")) {
+    throw new CliUsageError("Usage: lmti config <show|inspect|validate> [--json]");
+  }
+  const report = await inspectConfigCommand(cwd, stringFlag(flags, "config"));
+  const commandName = `lmti.config.${subcommand}`;
+  const status = report.errors.length > 0 ? "error" : report.warnings.length > 0 ? "warn" : "pass";
+  setCliExitCode(status);
+  if (flags.json) {
+    printCliEnvelope(commandName, status, report.warnings, report.errors, report.data);
+    return;
+  }
+  printSafeText([
+    subcommand === "validate" ? "LMTI Config Validate" : "LMTI Config",
+    "",
+    `Path: ${report.data.path ?? "(missing)"}`,
+    `Format: ${report.data.format ?? "(unknown)"}`,
+    `Exists: ${report.data.exists ? "yes" : "no"}`,
+    `Result: ${status.toUpperCase()}`
+  ].join("\n"));
+}
+
+async function runAgent(args: string[], cwd = process.cwd()): Promise<void> {
+  const [subcommand, ...rest] = args;
+  const { positional, flags } = parseArgs(rest);
+  if (subcommand === "inspect") {
+    const data = {
+      boundary: "CLI/API JSON only",
+      directStorageAccess: false,
+      rawSQLiteAccess: false,
+      secretMemoryAllowed: false,
+      commands: ["lmti skill route", "lmti skill show", "lmti memory retrieve", "lmti policy check", "lmti publish check"]
+    };
+    if (flags.json) {
+      printCliEnvelope("lmti.agent.inspect", "pass", [], [], data);
+      return;
+    }
+    printSafeText(["LMTI Agent Boundary", "", ...data.commands.map((command) => `- ${command}`)].join("\n"));
+    return;
+  }
+  if (subcommand !== "context") {
+    throw new CliUsageError("Usage: lmti agent <inspect|context> --intent <intent> [--json]");
+  }
+  const intent = stringFlag(flags, "intent") ?? positional[0];
+  if (!intent) {
+    writeCliUsage("lmti.agent.context", "Usage: lmti agent context --intent <intent> [--json]", Boolean(flags.json));
+    return;
+  }
+  const results = await retrieveMemoryForTask(intent, {
+    cwd,
+    privacyMode: "safe",
+    limit: parseNumberFlag(flags, "limit", 8)
+  });
+  const data = { intent, results, privacy: { max: "internal", secret: "blocked", doNotPrompt: "blocked" } };
+  if (flags.json) {
+    printCliEnvelope("lmti.agent.context", "pass", [], [], data);
+    return;
+  }
+  printSafeText([
+    "LMTI Agent Context",
+    "",
+    `Intent: ${intent}`,
+    `Results: ${results.length}`,
+    "Privacy: secret and do_not_prompt memory blocked"
+  ].join("\n"));
+}
+
+async function runCleanup(args: string[], cwd = process.cwd()): Promise<void> {
+  const [subcommand, ...rest] = args;
+  const { flags } = parseArgs(rest);
+  if (subcommand !== "check") {
+    throw new CliUsageError("Usage: lmti cleanup check [--json]");
+  }
+  const reportPath = path.join(cwd, "docs", "cleanup-report.md");
+  const reportExists = await pathExists(reportPath);
+  const gitStatus = runGit(cwd, ["status", "--porcelain=v1"]);
+  const dirty = gitStatus.ok && gitStatus.stdout.trim().length > 0;
+  const checks = [
+    { check: "cleanup_report", status: reportExists ? "pass" : "warn", detail: reportExists ? "docs/cleanup-report.md exists" : "cleanup report is missing" },
+    { check: "working_tree", status: dirty ? "warn" : "pass", detail: dirty ? "working tree has local changes" : "working tree clean" }
+  ];
+  const status: CliStatus = checks.some((check) => check.status === "warn") ? "warn" : "pass";
+  const warnings = checks.filter((check) => check.status === "warn").map((check) => ({ code: "CONFIG_INVALID", message: check.detail }));
+  setCliExitCode(status);
+  if (flags.json) {
+    printCliEnvelope("lmti.cleanup.check", status, warnings, [], { checks });
+    return;
+  }
+  printSafeText([
+    "LMTI Cleanup Check",
+    "",
+    "| Check | Status | Detail |",
+    "|---|---|---|",
+    ...checks.map((check) => `| ${check.check} | ${check.status.toUpperCase()} | ${check.detail} |`),
+    "",
+    `Result: ${status.toUpperCase()}`
+  ].join("\n"));
 }
 
 export async function preflightCommand(
@@ -770,6 +1292,1243 @@ export async function preflightCommand(
       phaseLatencyMs: latency.phases()
     }
   };
+}
+
+export async function publishPreflightCommand(cwd: string, options: PublishPreflightOptions = {}): Promise<PublishPreflightResult> {
+  const config = await loadPublishPreflightConfig(cwd, options);
+  const checks: PublishPreflightCheck[] = [];
+  const targetBranch = options.target ?? config.targetBranch;
+  const targetRef = `origin/${targetBranch}`;
+
+  checks.push(
+    config.publicRepo
+      ? {
+          name: "publish_target",
+          title: "Publish target",
+          status: "pass",
+          message: `Configured target is ${sanitizeRepoLocator(config.publicRepo)}.`
+        }
+      : {
+          name: "publish_target",
+          title: "Publish target",
+          status: "error",
+          message: "No public publish repository is configured.",
+          fix: "Add publish.publicRepo to .lmti/config.json, publish_repository to .lmti/layer.json, or repository.url to package.json."
+        }
+  );
+
+  const gitRootResult = runGit(cwd, ["rev-parse", "--show-toplevel"]);
+  if (!gitRootResult.ok || !gitRootResult.stdout.trim()) {
+    checks.push({
+      name: "repository_identity",
+      title: "Repository identity",
+      status: "error",
+      message: "Current directory is not inside a Git repository.",
+      fix: "Run the publish preflight from the repository root before opening a PR or publishing."
+    });
+    return finalizePublishPreflight({
+      checks,
+      config,
+      targetBranch,
+      strict: Boolean(options.strict)
+    });
+  }
+
+  const repoRoot = gitRootResult.stdout.trim();
+  const identity = await readPublishIdentity(repoRoot);
+  checks.push(createRepositoryIdentityCheck(identity, config.publicRepo));
+
+  const originResult = runGit(repoRoot, ["remote", "get-url", "origin"]);
+  const currentOrigin = originResult.ok ? originResult.stdout.trim() : undefined;
+  checks.push(createRemoteOriginCheck(currentOrigin, config));
+
+  const branchResult = runGit(repoRoot, ["branch", "--show-current"]);
+  const currentBranch = branchResult.ok ? branchResult.stdout.trim() : undefined;
+  checks.push(createBranchSafetyCheck(currentBranch, config.allowedPublishBranches));
+
+  const targetExists = runGit(repoRoot, ["rev-parse", "--verify", "--quiet", targetRef]);
+  let hasCommonHistory = false;
+  if (!targetExists.ok) {
+    checks.push({
+      name: "git_history",
+      title: "Git history",
+      status: "error",
+      message: `Target ref ${targetRef} was not found locally.`,
+      fix: `Fetch the target branch first, then run lmti publish preflight --target ${targetBranch} again.`
+    });
+  } else {
+    const mergeBase = runGit(repoRoot, ["merge-base", "HEAD", targetRef]);
+    hasCommonHistory = mergeBase.ok && mergeBase.stdout.trim().length > 0;
+    checks.push(
+      hasCommonHistory
+        ? {
+            name: "git_history",
+            title: "Git history",
+            status: "pass",
+            message: `Branch shares history with ${targetRef}.`
+          }
+        : {
+            name: "git_history",
+            title: "Git history",
+            status: "error",
+            message: `Current branch does not share Git history with ${targetRef}. This may create a PR with entirely different commit histories.`,
+            fix: `Recreate the branch from ${targetRef}, then cherry-pick or re-apply only the intended publish commits.`
+          }
+    );
+  }
+
+  checks.push(createDivergenceCheck(repoRoot, targetRef, hasCommonHistory));
+
+  const statusResult = runGit(repoRoot, ["status", "--porcelain=v1"]);
+  const statusEntries = statusResult.ok ? parseGitStatus(statusResult.stdout) : [];
+  checks.push(createWorkingTreeCheck(statusResult.ok, statusEntries));
+
+  const trackedFilesResult = runGit(repoRoot, ["ls-files"]);
+  const trackedFiles = trackedFilesResult.ok ? splitLines(trackedFilesResult.stdout) : [];
+  checks.push(createProtectedFilesCheck(statusEntries, trackedFiles, config.protectedPaths));
+
+  checks.push(await createPackageMetadataCheck(repoRoot));
+  checks.push(await createOpenSourceDocsCheck(repoRoot));
+  checks.push(await createLmtiIdentityCheck(repoRoot));
+
+  return finalizePublishPreflight({
+    checks,
+    config,
+    targetBranch,
+    currentOrigin,
+    currentBranch,
+    strict: Boolean(options.strict)
+  });
+}
+
+function finalizePublishPreflight(input: {
+  checks: PublishPreflightCheck[];
+  config: PublishPreflightConfig;
+  targetBranch: string;
+  currentOrigin?: string;
+  currentBranch?: string;
+  strict: boolean;
+}): PublishPreflightResult {
+  const checks = input.strict
+    ? input.checks.map((check) => (check.status === "warn" ? { ...check, status: "error" as const, message: `Strict mode: ${check.message}` } : check))
+    : input.checks;
+  const hasError = checks.some((check) => check.status === "error");
+  const hasWarn = checks.some((check) => check.status === "warn");
+  const result: PublishPreflightResultState = hasError ? "blocked" : hasWarn ? "warning" : "pass";
+  const exitCode: 0 | 1 | 2 = hasError ? 2 : hasWarn ? 1 : 0;
+  return {
+    command: "lmti publish preflight",
+    result,
+    exitCode,
+    targetRepo: input.config.publicRepo ? sanitizeRepoLocator(input.config.publicRepo) : undefined,
+    currentOrigin: input.currentOrigin ? sanitizeRepoLocator(input.currentOrigin) : undefined,
+    currentBranch: input.currentBranch,
+    targetBranch: input.targetBranch,
+    checks,
+    next: result === "blocked"
+      ? "Stop. Do not push, publish, open a PR, or change remotes until the ERROR items are resolved."
+      : result === "warning"
+        ? "Review warning items before opening the PR or publishing."
+        : "Safe to continue with the publish/PR flow.",
+    configSources: input.config.sources
+  };
+}
+
+function formatPublishPreflight(result: PublishPreflightResult, options: { fixSuggest?: boolean } = {}): string {
+  const lines = [
+    "LMTI Publish Preflight",
+    "",
+    `Target repo: ${result.targetRepo ?? "(missing)"}`,
+    `Current origin: ${result.currentOrigin ?? "(missing)"}`,
+    `Current branch: ${result.currentBranch ?? "(detached or unknown)"}`,
+    `Target branch: ${result.targetBranch}`,
+    "",
+    "| Check | Status | Detail |",
+    "|---|---|---|",
+    ...result.checks.map((check) => `| ${check.title} | ${check.status.toUpperCase()} | ${check.message.replace(/\|/g, "\\|")} |`),
+    "",
+    `Result: ${result.result === "warning" ? "PASS WITH WARNINGS" : result.result.toUpperCase()}`,
+    `Next: ${result.next}`
+  ];
+
+  const fixes = Array.from(new Set(result.checks.filter((check) => check.status !== "pass" && check.fix).map((check) => check.fix as string)));
+  if ((options.fixSuggest || result.result === "blocked") && fixes.length > 0) {
+    lines.push("", "Fix:");
+    fixes.forEach((fix, index) => {
+      lines.push(`${index + 1}. ${fix}`);
+    });
+  }
+  return lines.join("\n");
+}
+
+function createPublishEnvelope(result: PublishPreflightResult): CliJsonEnvelope {
+  return createCliEnvelope(
+    "lmti.publish.preflight",
+    publishResultToCliStatus(result.result),
+    result.checks
+      .filter((check) => check.status === "warn")
+      .map((check) => ({ code: publishCheckCode(check), message: check.message, suggestion: check.fix })),
+    result.checks
+      .filter((check) => check.status === "error")
+      .map((check) => ({ code: publishCheckCode(check), message: check.message, suggestion: check.fix })),
+    result
+  );
+}
+
+function publishCheckCode(check: PublishPreflightCheck): string {
+  switch (check.name) {
+    case "publish_target":
+      return "PUBLISH_TARGET_MISSING";
+    case "remote_origin":
+      return "REMOTE_ORIGIN_MISMATCH";
+    case "git_history":
+      return "GIT_HISTORY_NO_COMMON_ANCESTOR";
+    case "branch_safety":
+      return "BRANCH_NOT_ALLOWED";
+    case "dirty_working_tree":
+      return "WORKING_TREE_DIRTY";
+    case "protected_files":
+      return "PROTECTED_FILE_DETECTED";
+    case "open_source_docs":
+      return "PUBLISH_TARGET_MISSING";
+    case "package_metadata":
+      return "CONFIG_INVALID";
+    default:
+      return check.status === "error" ? "UNKNOWN_ERROR" : "CONFIG_INVALID";
+  }
+}
+
+async function loadPublishPreflightConfig(cwd: string, options: PublishPreflightOptions): Promise<PublishPreflightConfig> {
+  const repoRoot = await bestEffortGitRoot(cwd);
+  const sources: string[] = [];
+  const configPublish = getPublishBlock(await readJsonFileIfExists(path.join(repoRoot, ".lmti", "config.json")));
+  const layer = await readJsonFileIfExists(path.join(repoRoot, ".lmti", "layer.json"));
+  const packageJson = await readJsonFileIfExists(path.join(repoRoot, "package.json"));
+  const layerPublicRepo = stringRecordValue(layer, "publish_repository");
+  const packageRepo = packageRepositoryUrl(packageJson);
+
+  let publicRepo = options.publicRepo;
+  if (publicRepo) {
+    sources.push("option.publicRepo");
+  }
+  if (!publicRepo && configPublish.publicRepo) {
+    publicRepo = configPublish.publicRepo;
+    sources.push(".lmti/config.json:publish.publicRepo");
+  }
+  if (!publicRepo && layerPublicRepo) {
+    publicRepo = layerPublicRepo;
+    sources.push(".lmti/layer.json:publish_repository");
+  }
+  if (!publicRepo && packageRepo) {
+    publicRepo = packageRepo;
+    sources.push("package.json:repository.url");
+  }
+
+  return {
+    publicRepo,
+    privateRepoPatterns: uniqueStrings([...DEFAULT_PRIVATE_REPO_PATTERNS, ...configPublish.privateRepoPatterns]),
+    targetBranch: configPublish.targetBranch ?? DEFAULT_PUBLISH_TARGET_BRANCH,
+    allowedPublishBranches: configPublish.allowedPublishBranches.length > 0 ? configPublish.allowedPublishBranches : DEFAULT_PUBLISH_ALLOWED_BRANCHES,
+    protectedPaths: configPublish.protectedPaths.length > 0 ? configPublish.protectedPaths : DEFAULT_PROTECTED_PUBLISH_PATHS,
+    sources
+  };
+}
+
+async function bestEffortGitRoot(cwd: string): Promise<string> {
+  const gitRoot = runGit(cwd, ["rev-parse", "--show-toplevel"]);
+  return gitRoot.ok && gitRoot.stdout.trim() ? gitRoot.stdout.trim() : cwd;
+}
+
+export async function routeSkillCommand(cwd: string, request: string): Promise<LmtiSkillRouteOutcome> {
+  let registry: LmtiSkillDefinition[];
+  try {
+    registry = await readSkillRegistry(cwd);
+  } catch (error) {
+    return {
+      status: "error",
+      warnings: [],
+      errors: [{ code: "THOTH_REGISTRY_MISSING", message: error instanceof Error ? error.message : String(error) }],
+      result: {
+        request,
+        intent: "unknown",
+        decision: "invalid_registry",
+        candidates: [],
+        secondarySkills: [],
+        requiresPolicy: false,
+        requiresMemory: false,
+        requiredPolicyGates: [],
+        recommendedCommands: [],
+        reason: "Skill registry could not be loaded."
+      }
+    };
+  }
+
+  const scored = registry
+    .map((skill) => scoreSkillForRequest(skill, request))
+    .filter((skill) => skill.score > 0)
+    .sort((left, right) => right.score - left.score || riskLevelRank(right.skill.riskLevel) - riskLevelRank(left.skill.riskLevel) || left.skill.id.localeCompare(right.skill.id));
+
+  if (scored.length === 0) {
+    return {
+      status: "warn",
+      warnings: [{ code: "THOTH_NO_SKILL_FOUND", message: "No suitable skill was found for this request." }],
+      errors: [],
+      result: {
+        request,
+        intent: "unknown",
+        decision: "no_skill_found",
+        candidates: [],
+        secondarySkills: [],
+        requiresPolicy: false,
+        requiresMemory: false,
+        requiredPolicyGates: [],
+        recommendedCommands: [],
+        reason: "No registered skill matched this request."
+      }
+    };
+  }
+
+  const selected = scored[0];
+  const secondary = scored.slice(1);
+  const status: CliStatus = secondary.length > 0 ? "warn" : "pass";
+  const selectedSkill = selected.skill;
+  return {
+    status,
+    warnings: secondary.length > 0 ? [{ code: "THOTH_MULTIPLE_SKILLS_MATCHED", message: "More than one skill matched the request. LMTI selected the highest-risk relevant skill first." }] : [],
+    errors: [],
+    result: {
+      request,
+      intent: selected.intent,
+      decision: secondary.length > 0 ? "multiple_candidates" : "skill_selected",
+      selectedSkill: {
+        id: selectedSkill.id,
+        name: selectedSkill.name,
+        file: selectedSkill.file,
+        riskLevel: selectedSkill.riskLevel
+      },
+      candidates: scored.map((item) => ({
+        id: item.skill.id,
+        score: Math.round(item.score) / 100,
+        intent: item.intent,
+        riskLevel: item.skill.riskLevel,
+        reason: item.reason
+      })),
+      secondarySkills: secondary.map((item) => ({
+        id: item.skill.id,
+        reason: `${item.skill.id} matched too, but ${selectedSkill.id} has higher priority for this request.`
+      })),
+      requiresPolicy: selectedSkill.requiresPolicy,
+      requiresMemory: selectedSkill.requiresMemory,
+      requiredPolicyGates: policyGatesForSkill(selectedSkill),
+      recommendedCommands: recommendedCommandsForSkill(selectedSkill, selected.intent),
+      memoryRequest: selectedSkill.requiresMemory
+        ? { intent: selected.intent, privacyMax: "internal", includeLessons: true, includeRelatedFiles: true }
+        : undefined,
+      reason: selected.reason
+    }
+  };
+}
+
+async function readSkillRegistry(cwd: string): Promise<LmtiSkillDefinition[]> {
+  const registryPath = path.join(cwd, "skills", "registry.toml");
+  const text = await fs.readFile(registryPath, "utf8");
+  const skills = parseSkillRegistryToml(text);
+  if (skills.length === 0) {
+    throw new Error("skills/registry.toml contains no skills.");
+  }
+  return skills;
+}
+
+function parseSkillRegistryToml(text: string): LmtiSkillDefinition[] {
+  const blocks = text.split(/\[\[skills\]\]/u).slice(1);
+  return blocks.map((block) => {
+    const raw: Record<string, string> = {};
+    for (const line of block.split(/\r?\n/u)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) {
+        continue;
+      }
+      const match = trimmed.match(/^([a-z_]+)\s*=\s*(.+)$/u);
+      if (match) {
+        raw[match[1]] = match[2].trim();
+      }
+    }
+    return {
+      id: parseTomlString(raw.id),
+      name: parseTomlString(raw.name),
+      description: parseTomlString(raw.description),
+      file: parseTomlString(raw.file),
+      intents: parseTomlStringArray(raw.intents),
+      requiresPolicy: parseTomlBoolean(raw.requires_policy),
+      requiresMemory: parseTomlBoolean(raw.requires_memory),
+      riskLevel: parseTomlString(raw.risk_level)
+    };
+  }).filter((skill) => skill.id && skill.file);
+}
+
+function parseTomlString(value?: string): string {
+  return value?.trim().replace(/^"|"$/gu, "") ?? "";
+}
+
+function parseTomlStringArray(value?: string): string[] {
+  if (!value) {
+    return [];
+  }
+  const inner = value.trim().replace(/^\[/u, "").replace(/\]$/u, "");
+  return inner.split(",").map((item) => parseTomlString(item.trim())).filter(Boolean);
+}
+
+function parseTomlBoolean(value?: string): boolean {
+  return value?.trim().toLowerCase() === "true";
+}
+
+function scoreSkillForRequest(skill: LmtiSkillDefinition, request: string): { skill: LmtiSkillDefinition; score: number; intent: string; reason: string } {
+  const normalizedRequest = normalizeCommandText(request);
+  let score = 0;
+  let bestIntent = "unknown";
+  for (const intent of skill.intents) {
+    const canonical = canonicalSkillIntent(intent);
+    const normalizedIntent = normalizeCommandText(intent);
+    if (normalizedIntent && normalizedRequest.includes(normalizedIntent)) {
+      score += 40;
+      bestIntent = canonical;
+    }
+    const aliases = skillIntentAliases(canonical);
+    for (const alias of aliases) {
+      if (normalizedRequest.includes(alias)) {
+        score += 18;
+        bestIntent = canonical;
+      }
+    }
+  }
+  const corpus = normalizeCommandText(`${skill.id} ${skill.name} ${skill.description}`);
+  for (const token of normalizedRequest.split(" ").filter((part) => part.length > 2)) {
+    if (corpus.includes(token)) {
+      score += 3;
+    }
+  }
+  if (score > 0) {
+    score += riskLevelRank(skill.riskLevel) * 2;
+  }
+  return { skill, score, intent: bestIntent, reason: routeReasonForIntent(bestIntent) };
+}
+
+function normalizeCommandText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9_]+/gu, " ").replace(/\s+/gu, " ").trim();
+}
+
+function canonicalSkillIntent(intent: string): string {
+  const normalized = normalizeCommandText(intent).replace(/\s/gu, "_");
+  if (["publish", "push", "pull_request", "open_source", "release"].includes(normalized)) return "publish";
+  if (["cleanup", "refactor", "remove_unused", "organize_repo"].includes(normalized)) return "repo_cleanup";
+  if (["security", "secret_scan", "privacy", "leak_check"].includes(normalized)) return "security";
+  if (["memory", "context", "lesson", "retrieve"].includes(normalized)) return "memory";
+  if (["migrate", "json_to_sqlite", "storage_upgrade"].includes(normalized)) return "migration";
+  if (["readme", "docs", "documentation", "publish_docs"].includes(normalized)) return "documentation";
+  if (["doctor", "health_check", "validate_setup"].includes(normalized)) return "doctor";
+  if (["adapter", "agent_adapter", "plugin"].includes(normalized)) return "adapter";
+  return normalized || "unknown";
+}
+
+function skillIntentAliases(intent: string): string[] {
+  switch (intent) {
+    case "publish":
+      return ["publish", "push", "pull request", "pr", "open source", "release", "remote"];
+    case "repo_cleanup":
+      return ["cleanup", "clean up", "refactor", "unused", "organize", "stabilize"];
+    case "security":
+      return ["security", "secret", "privacy", "leak", "protected file"];
+    case "memory":
+      return ["memory", "context", "lesson", "retrieve"];
+    case "migration":
+      return ["migrate", "migration", "json", "sqlite", "storage"];
+    case "documentation":
+      return ["docs", "documentation", "readme", "commands"];
+    case "doctor":
+      return ["doctor", "health", "validate", "diagnose"];
+    case "adapter":
+      return ["adapter", "agent", "plugin", "connector"];
+    default:
+      return [];
+  }
+}
+
+function routeReasonForIntent(intent: string): string {
+  switch (intent) {
+    case "publish":
+      return "Publishing, pushing, PR, open-source, or release work requires publish checks first.";
+    case "repo_cleanup":
+      return "The request is about cleanup or refactoring while preserving behavior.";
+    case "security":
+      return "Security or secret-handling wording has priority because unsafe context can leak data.";
+    case "memory":
+      return "The request asks for memory or context retrieval through privacy gates.";
+    case "migration":
+      return "The request involves JSON, SQLite, storage, or migration behavior.";
+    case "documentation":
+      return "The request is documentation-oriented.";
+    case "doctor":
+      return "The request is a system health or validation check.";
+    case "adapter":
+      return "The request concerns adapter or agent integration boundaries.";
+    default:
+      return "The request matched registered skill metadata.";
+  }
+}
+
+function riskLevelRank(risk: string): number {
+  if (risk === "high") return 3;
+  if (risk === "medium") return 2;
+  if (risk === "low") return 1;
+  return 0;
+}
+
+function policyGatesForSkill(skill: LmtiSkillDefinition): string[] {
+  if (!skill.requiresPolicy) {
+    return [];
+  }
+  switch (skill.id) {
+    case "publish-preflight":
+      return ["GitRemotePolicy", "BranchHistoryPolicy", "ProtectedFilesPolicy", "SecretLeakPolicy"];
+    case "security-check":
+      return ["SecretLeakPolicy", "PrivacyBoundaryPolicy", "ProtectedFilesPolicy"];
+    case "migration-from-json":
+      return ["MigrationDryRunPolicy", "SecretImportPolicy", "StorageBackupPolicy"];
+    case "repo-cleanup":
+      return ["ProtectedFilesPolicy", "BehaviorPreservationPolicy"];
+    case "adapter":
+      return ["AdapterManifestPolicy", "SandboxScopePolicy"];
+    default:
+      return ["DefaultSafetyPolicy"];
+  }
+}
+
+function recommendedCommandsForSkill(skill: LmtiSkillDefinition, intent: string): string[] {
+  switch (skill.id) {
+    case "publish-preflight":
+      return ["lmti publish check"];
+    case "repo-cleanup":
+      return ["lmti skill show repo-cleanup", "lmti cleanup check"];
+    case "security-check":
+      return ["lmti doctor --security --json", "lmti publish check --json"];
+    case "memory-retrieval":
+      return [`lmti memory retrieve --intent ${intent} --json`];
+    case "migration-from-json":
+      return ["lmti migrate from-json --dry-run", "lmti migrate from-json"];
+    case "documentation":
+      return ["lmti skill show documentation"];
+    case "doctor":
+      return ["lmti doctor --json"];
+    case "adapter":
+      return ["lmti skill show adapter", "lmti agent inspect --json"];
+    default:
+      return [`lmti skill show ${skill.id}`];
+  }
+}
+
+async function loadSkillContentCommand(cwd: string, id: string): Promise<{ status: CliStatus; warnings: CliBoundaryMessage[]; errors: CliBoundaryMessage[]; data: { skill?: LmtiSkillDefinition; content: string } }> {
+  const registry = await readSkillRegistry(cwd);
+  const skill = registry.find((item) => item.id === id);
+  if (!skill) {
+    return {
+      status: "error",
+      warnings: [],
+      errors: [{ code: "THOTH_SKILL_NOT_FOUND", message: "Skill id was not found in skills/registry.toml." }],
+      data: { content: "" }
+    };
+  }
+  const skillPath = path.resolve(cwd, skill.file);
+  assertPathInsideCwd(cwd, skillPath, "skill file");
+  const statResult = await fs.stat(skillPath);
+  if (statResult.size > 128 * 1024) {
+    return {
+      status: "error",
+      warnings: [],
+      errors: [{ code: "THOTH_SKILL_INVALID", message: `${skill.file} is unusually large for a skill.md file.` }],
+      data: { skill, content: "" }
+    };
+  }
+  const content = await fs.readFile(skillPath, "utf8");
+  const scan = runEgressSecretScan(content);
+  if (scan.blocked) {
+    return {
+      status: "blocked",
+      warnings: [],
+      errors: [{ code: "SECRET_DETECTED", message: `${skill.file} contains secret-like material and will not be printed.` }],
+      data: { skill, content: "" }
+    };
+  }
+  return { status: "pass", warnings: [], errors: [], data: { skill, content } };
+}
+
+async function validateSkillsCommand(cwd: string): Promise<{ status: CliStatus; warnings: CliBoundaryMessage[]; errors: CliBoundaryMessage[]; data: { skillsChecked: number; checks: Array<{ check: string; status: CliStatus; detail: string }> } }> {
+  const checks: Array<{ check: string; status: CliStatus; detail: string }> = [];
+  let registry: LmtiSkillDefinition[] = [];
+  try {
+    registry = await readSkillRegistry(cwd);
+    checks.push({ check: "registry", status: "pass", detail: `${registry.length} skills registered` });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      status: "error",
+      warnings: [],
+      errors: [{ code: "THOTH_REGISTRY_MISSING", message }],
+      data: { skillsChecked: 0, checks: [{ check: "registry", status: "error", detail: message }] }
+    };
+  }
+
+  const duplicateIds = registry.map((skill) => skill.id).filter((id, index, ids) => ids.indexOf(id) !== index);
+  checks.push({
+    check: "duplicate_ids",
+    status: duplicateIds.length > 0 ? "error" : "pass",
+    detail: duplicateIds.length > 0 ? `duplicate ids: ${Array.from(new Set(duplicateIds)).join(", ")}` : "no duplicate skill ids"
+  });
+
+  const requiredSections = ["Purpose", "When to use", "Inputs needed", "Required commands", "Safety rules", "Block conditions", "Output expected"];
+  for (const skill of registry) {
+    const result = await loadSkillContentCommand(cwd, skill.id);
+    if (result.errors.length > 0) {
+      checks.push({ check: `skill:${skill.id}`, status: result.status, detail: result.errors.map((error) => error.message).join("; ") });
+      continue;
+    }
+    const missing = requiredSections.filter((section) => !new RegExp(`^##\\s+${escapeRegExp(section)}\\b`, "imu").test(result.data.content));
+    checks.push({
+      check: `skill:${skill.id}`,
+      status: missing.length > 0 ? "warn" : "pass",
+      detail: missing.length > 0 ? `missing sections: ${missing.join(", ")}` : "required sections present"
+    });
+  }
+
+  const errors = checks.filter((check) => check.status === "error").map((check) => ({ code: "THOTH_SKILL_INVALID", message: check.detail }));
+  const warnings = checks.filter((check) => check.status === "warn").map((check) => ({ code: "THOTH_SKILL_INVALID", message: check.detail }));
+  return {
+    status: errors.length > 0 ? "error" : warnings.length > 0 ? "warn" : "pass",
+    warnings,
+    errors,
+    data: { skillsChecked: registry.length, checks }
+  };
+}
+
+function printSkillRoute(outcome: LmtiSkillRouteOutcome): void {
+  const selected = outcome.result.selectedSkill;
+  const lines = [
+    "LMTI Skill Route",
+    "",
+    `Intent: ${outcome.result.intent}`,
+    `Selected skill: ${selected ? selected.id : "none"}`,
+    `Reason: ${outcome.result.reason}`,
+    `Result: ${outcome.status.toUpperCase()}`
+  ];
+  if (outcome.result.recommendedCommands.length > 0) {
+    lines.push("", "Recommended commands:", ...outcome.result.recommendedCommands.map((command) => `- ${command}`));
+  }
+  printSafeText(lines.join("\n"));
+}
+
+function printSkillHelp(): void {
+  printSafeText(`Usage:
+  lmti skill list [--json]
+  lmti skill route "<task>" [--json]
+  lmti skill show <skill-id> [--json]
+  lmti skill validate [--json]
+
+Description:
+  Selects and loads skill.md instructions. These commands do not modify files.`);
+}
+
+function printThothHelp(): void {
+  printSafeText(`Usage:
+  lmti thoth <list|route|explain|show|inspect|validate|doctor> [--json]
+
+Description:
+  Advanced skill-routing commands. Thoth routes skills only; it does not execute tasks.`);
+}
+
+function evaluatePolicyAction(action: string, paths: string[], cwd: string): { status: CliStatus; warnings: CliBoundaryMessage[]; errors: CliBoundaryMessage[]; data: { action: string; decision: string; paths: string[] } } {
+  const normalized = action.trim().toLowerCase();
+  const protectedPaths = paths.filter((entry) => isProtectedCommandPath(path.relative(cwd, path.resolve(cwd, entry))));
+  if (protectedPaths.length > 0) {
+    return {
+      status: "blocked",
+      warnings: [],
+      errors: [{ code: "PROTECTED_FILE_DETECTED", message: "Protected file path is not allowed through the safety gate." }],
+      data: { action: normalized, decision: "block", paths: protectedPaths }
+    };
+  }
+  const highRisk = new Set(["publish", "push", "pull_request", "deploy", "migration", "memory_export", "database_migration", "destructive_cleanup"]);
+  if (highRisk.has(normalized)) {
+    return {
+      status: "warn",
+      warnings: [{ code: "POLICY_APPROVAL_REQUIRED", message: "High-risk action requires explicit safety gate approval." }],
+      errors: [],
+      data: { action: normalized, decision: "require_user_approval", paths }
+    };
+  }
+  return { status: "pass", warnings: [], errors: [], data: { action: normalized, decision: "allow", paths } };
+}
+
+function isProtectedCommandPath(filePath: string): boolean {
+  return /(^|[/\\])\.env(?:$|[./\\_-])|(^|[/\\])secrets([/\\]|$)|\.(?:pem|key|p12|pfx|token)$/iu.test(filePath);
+}
+
+async function inspectConfigCommand(cwd: string, customPath?: string): Promise<{ warnings: CliBoundaryMessage[]; errors: CliBoundaryMessage[]; data: { exists: boolean; path?: string; format?: "toml" | "json"; sections: string[]; keys: string[] } }> {
+  const candidates = customPath
+    ? [path.resolve(cwd, customPath)]
+    : [path.join(cwd, ".lmti", "config.toml"), path.join(cwd, ".lmti", "config.json")];
+  let foundPath: string | undefined;
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      foundPath = candidate;
+      break;
+    }
+  }
+  if (!foundPath) {
+    return {
+      warnings: [],
+      errors: [{ code: "CONFIG_INVALID", message: "No LMTI config file was found." }],
+      data: { exists: false, sections: [], keys: [] }
+    };
+  }
+  assertPathInsideCwd(cwd, foundPath, "config");
+  const content = await fs.readFile(foundPath, "utf8");
+  const format = foundPath.endsWith(".toml") ? "toml" : "json";
+  const warnings: CliBoundaryMessage[] = [];
+  const errors: CliBoundaryMessage[] = [];
+  const scan = runEgressSecretScan(content);
+  if (scan.blocked) {
+    warnings.push({ code: "SECRET_DETECTED", message: "Config contains secret-like material; raw values were not printed." });
+  }
+  let sections: string[] = [];
+  let keys: string[] = [];
+  if (format === "json") {
+    try {
+      const parsed = JSON.parse(content) as unknown;
+      keys = isRecord(parsed) ? Object.keys(parsed).sort() : [];
+      warnings.push({ code: "CONFIG_INVALID", message: "JSON config is supported for the current TypeScript CLI, but TOML is the target human config format." });
+    } catch {
+      errors.push({ code: "CONFIG_INVALID", message: "Config JSON is invalid." });
+    }
+  } else {
+    sections = Array.from(content.matchAll(/^\s*\[([^\]]+)\]\s*$/gmu)).map((match) => match[1]).sort();
+    keys = Array.from(content.matchAll(/^\s*([A-Za-z0-9_.-]+)\s*=/gmu)).map((match) => match[1]).sort();
+  }
+  return {
+    warnings,
+    errors,
+    data: {
+      exists: true,
+      path: normalizeGitPath(path.relative(cwd, foundPath)),
+      format,
+      sections,
+      keys
+    }
+  };
+}
+
+async function readPublishIdentity(cwd: string): Promise<{ declaredRepos: string[]; sources: string[] }> {
+  const layer = await readJsonFileIfExists(path.join(cwd, ".lmti", "layer.json"));
+  const packageJson = await readJsonFileIfExists(path.join(cwd, "package.json"));
+  const declaredRepos: string[] = [];
+  const sources: string[] = [];
+  const layerRepo = stringRecordValue(layer, "publish_repository");
+  const packageRepo = packageRepositoryUrl(packageJson);
+  if (layerRepo) {
+    declaredRepos.push(layerRepo);
+    sources.push(".lmti/layer.json:publish_repository");
+  }
+  if (packageRepo) {
+    declaredRepos.push(packageRepo);
+    sources.push("package.json:repository.url");
+  }
+  return { declaredRepos, sources };
+}
+
+function createRepositoryIdentityCheck(identity: { declaredRepos: string[]; sources: string[] }, publicRepo?: string): PublishPreflightCheck {
+  if (!publicRepo) {
+    return {
+      name: "repository_identity",
+      title: "Repository identity",
+      status: "error",
+      message: "Repository identity cannot be verified without a publish target.",
+      fix: "Declare the public LMTI publish repository before creating a public PR or release."
+    };
+  }
+  if (identity.declaredRepos.length === 0) {
+    return {
+      name: "repository_identity",
+      title: "Repository identity",
+      status: "warn",
+      message: "No repository identity metadata was found in .lmti/layer.json or package.json.",
+      fix: "Add publish_repository to .lmti/layer.json or repository.url to package.json."
+    };
+  }
+  const target = normalizeRepoLocator(publicRepo);
+  const matches = identity.declaredRepos.some((repo) => normalizeRepoLocator(repo) === target);
+  return matches
+    ? {
+        name: "repository_identity",
+        title: "Repository identity",
+        status: "pass",
+        message: `Repository metadata matches publish target via ${identity.sources.join(", ")}.`
+      }
+    : {
+        name: "repository_identity",
+        title: "Repository identity",
+        status: "error",
+        message: "Repository metadata does not match the configured publish target.",
+        fix: "Fix repository metadata before publishing so agents do not confuse private/internal and public repository identity."
+      };
+}
+
+function createRemoteOriginCheck(currentOrigin: string | undefined, config: PublishPreflightConfig): PublishPreflightCheck {
+  if (!currentOrigin) {
+    return {
+      name: "remote_origin",
+      title: "Remote origin",
+      status: "error",
+      message: "Git remote origin is missing.",
+      fix: "Add the correct public origin remote or run from a clone that has origin configured."
+    };
+  }
+  if (!config.publicRepo) {
+    return {
+      name: "remote_origin",
+      title: "Remote origin",
+      status: "error",
+      message: "Origin cannot be verified because no publish target is configured.",
+      fix: "Declare publish.publicRepo before pushing or opening a public PR."
+    };
+  }
+  const normalizedOrigin = normalizeRepoLocator(currentOrigin);
+  const normalizedTarget = normalizeRepoLocator(config.publicRepo);
+  if (normalizedOrigin === normalizedTarget) {
+    return {
+      name: "remote_origin",
+      title: "Remote origin",
+      status: "pass",
+      message: "Origin matches configured public repo."
+    };
+  }
+  const matchedPrivatePattern = config.privateRepoPatterns.find((pattern) => normalizedOrigin.includes(pattern.toLowerCase()));
+  return {
+    name: "remote_origin",
+    title: "Remote origin",
+    status: "error",
+    message: matchedPrivatePattern
+      ? `Origin appears to point at a private/internal or legacy repo pattern (${matchedPrivatePattern}) instead of the publish target.`
+      : "Origin does not match the configured public publish repo.",
+    fix: "Confirm the intended public repo remote. Do not change remotes automatically; ask the owner to approve the safe recovery path."
+  };
+}
+
+function createBranchSafetyCheck(currentBranch: string | undefined, allowedBranches: string[]): PublishPreflightCheck {
+  if (!currentBranch) {
+    return {
+      name: "branch_safety",
+      title: "Branch safety",
+      status: "error",
+      message: "Current checkout is detached or branch name could not be resolved.",
+      fix: "Checkout a named publish branch created from the target branch before publishing."
+    };
+  }
+  if (allowedBranches.some((pattern) => matchesBranchPattern(currentBranch, pattern))) {
+    return {
+      name: "branch_safety",
+      title: "Branch safety",
+      status: "pass",
+      message: `Branch ${currentBranch} matches allowed publish patterns.`
+    };
+  }
+  return {
+    name: "branch_safety",
+    title: "Branch safety",
+    status: "warn",
+    message: `Branch ${currentBranch} does not match allowed publish patterns: ${allowedBranches.join(", ")}.`,
+    fix: "Use main, release/*, publish/*, or a configured publish branch pattern for public PR/release work."
+  };
+}
+
+function createDivergenceCheck(cwd: string, targetRef: string, hasCommonHistory: boolean): PublishPreflightCheck {
+  if (!hasCommonHistory) {
+    return {
+      name: "commit_divergence",
+      title: "Branch divergence",
+      status: "error",
+      message: `Cannot compute ahead/behind because HEAD has no common ancestor with ${targetRef}.`,
+      fix: `Recreate the branch from ${targetRef} before opening a PR.`
+    };
+  }
+  const divergence = runGit(cwd, ["rev-list", "--left-right", "--count", `HEAD...${targetRef}`]);
+  if (!divergence.ok) {
+    return {
+      name: "commit_divergence",
+      title: "Branch divergence",
+      status: "error",
+      message: `Could not compute ahead/behind against ${targetRef}.`,
+      fix: "Fetch the target branch and rerun publish preflight."
+    };
+  }
+  const [aheadText, behindText] = divergence.stdout.trim().split(/\s+/u);
+  const ahead = Number(aheadText ?? "0");
+  const behind = Number(behindText ?? "0");
+  if (ahead === 0 && behind === 0) {
+    return {
+      name: "commit_divergence",
+      title: "Branch divergence",
+      status: "pass",
+      message: `Ahead 0 commits, behind 0 commits against ${targetRef}.`
+    };
+  }
+  return {
+    name: "commit_divergence",
+    title: "Branch divergence",
+    status: "warn",
+    message: `Ahead ${Number.isFinite(ahead) ? ahead : 0} commits, behind ${Number.isFinite(behind) ? behind : 0} commits against ${targetRef}.`,
+    fix: "Review divergence before publishing. Rebase/merge only after owner-approved branch hygiene for the release or PR flow."
+  };
+}
+
+function createWorkingTreeCheck(statusOk: boolean, statusEntries: GitStatusEntry[]): PublishPreflightCheck {
+  if (!statusOk) {
+    return {
+      name: "dirty_working_tree",
+      title: "Working tree",
+      status: "error",
+      message: "Could not inspect Git working tree status.",
+      fix: "Run git status locally, resolve Git errors, and rerun publish preflight."
+    };
+  }
+  if (statusEntries.length === 0) {
+    return {
+      name: "dirty_working_tree",
+      title: "Working tree",
+      status: "pass",
+      message: "No uncommitted changes."
+    };
+  }
+  const states = summarizeFileStates(statusEntries);
+  return {
+    name: "dirty_working_tree",
+    title: "Working tree",
+    status: "warn",
+    message: `${statusEntries.length} changed path(s): ${states}.`,
+    fix: "Commit, stash, or intentionally remove local changes before publishing."
+  };
+}
+
+function createProtectedFilesCheck(statusEntries: GitStatusEntry[], trackedFiles: string[], protectedPaths: string[]): PublishPreflightCheck {
+  const stateByPath = new Map<string, string>();
+  for (const entry of statusEntries) {
+    stateByPath.set(normalizeGitPath(entry.path), entry.state);
+  }
+  for (const file of trackedFiles) {
+    const normalized = normalizeGitPath(file);
+    if (!stateByPath.has(normalized)) {
+      stateByPath.set(normalized, "tracked");
+    }
+  }
+
+  const protectedMatches = Array.from(stateByPath.entries())
+    .filter(([file]) => protectedPaths.some((pattern) => matchesProtectedPath(file, pattern)))
+    .map(([file, state]) => `${file} (${state})`);
+
+  if (protectedMatches.length === 0) {
+    return {
+      name: "protected_files",
+      title: "Protected files",
+      status: "pass",
+      message: "No protected files detected in tracked, staged, unstaged, or untracked paths."
+    };
+  }
+  return {
+    name: "protected_files",
+    title: "Protected files",
+    status: "error",
+    message: `Protected path(s) detected: ${protectedMatches.join(", ")}.`,
+    fix: "Remove protected files from the publish branch and keep secrets/private memory out of Git before publishing."
+  };
+}
+
+async function createLmtiIdentityCheck(cwd: string): Promise<PublishPreflightCheck> {
+  const layerPath = path.join(cwd, ".lmti", "layer.json");
+  const layer = await readJsonFileIfExists(layerPath);
+  if (isRecord(layer) && layer.type === "independent_agent_layer") {
+    return {
+      name: "lmti_layer_identity",
+      title: "LMTI layer identity",
+      status: "pass",
+      message: "LMTI detected as an independent agent memory/context layer."
+    };
+  }
+  if (await pathExists(path.join(cwd, ".lmti"))) {
+    return {
+      name: "lmti_layer_identity",
+      title: "LMTI layer identity",
+      status: "warn",
+      message: ".lmti exists but layer identity metadata is missing or incomplete.",
+      fix: "Add .lmti/layer.json metadata that states LMTI is an independent layer, not application runtime."
+    };
+  }
+  return {
+    name: "lmti_layer_identity",
+    title: "LMTI layer identity",
+    status: "warn",
+    message: "No .lmti layer metadata was found; independent LMTI boundary could not be verified.",
+    fix: "Initialize or attach LMTI metadata before publishing the LMTI repository."
+  };
+}
+
+async function createPackageMetadataCheck(cwd: string): Promise<PublishPreflightCheck> {
+  const packageJson = await readJsonFileIfExists(path.join(cwd, "package.json"));
+  if (!isRecord(packageJson)) {
+    return {
+      name: "package_metadata",
+      title: "Package metadata",
+      status: "warn",
+      message: "package.json was not found; package metadata could not be checked.",
+      fix: "Add package metadata or document why this repository is not package-distributed."
+    };
+  }
+  const missing: string[] = [];
+  if (!stringRecordValue(packageJson, "description")) {
+    missing.push("description");
+  }
+  if (!packageRepositoryUrl(packageJson)) {
+    missing.push("repository");
+  }
+  if (!stringRecordValue(packageJson, "author")) {
+    missing.push("author");
+  }
+  if (!stringRecordValue(packageJson, "license")) {
+    missing.push("license");
+  }
+  return missing.length === 0
+    ? {
+        name: "package_metadata",
+        title: "Package metadata",
+        status: "pass",
+        message: "Package metadata includes description, repository, author, and license."
+      }
+    : {
+        name: "package_metadata",
+        title: "Package metadata",
+        status: "warn",
+        message: `Package metadata is missing: ${missing.join(", ")}.`,
+        fix: "Complete package metadata before public release; license may remain pending only before final public publish."
+      };
+}
+
+async function createOpenSourceDocsCheck(cwd: string): Promise<PublishPreflightCheck> {
+  const required = ["README.md", "LICENSE", "SECURITY.md"];
+  const missing: string[] = [];
+  for (const fileName of required) {
+    if (!(await pathExists(path.join(cwd, fileName)))) {
+      missing.push(fileName);
+    }
+  }
+  return missing.length === 0
+    ? {
+        name: "open_source_docs",
+        title: "Open-source docs",
+        status: "pass",
+        message: "README, LICENSE, and SECURITY files are present."
+      }
+    : {
+        name: "open_source_docs",
+        title: "Open-source docs",
+        status: "error",
+        message: `Missing required public release document(s): ${missing.join(", ")}.`,
+        fix: "Add README, LICENSE, and SECURITY before public release or PR publication."
+      };
+}
+
+interface GitCommandResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+interface GitStatusEntry {
+  path: string;
+  state: string;
+}
+
+function runGit(cwd: string, args: string[]): GitCommandResult {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  const exitCode = typeof result.status === "number" ? result.status : 1;
+  return {
+    ok: exitCode === 0 && !result.error,
+    stdout: String(result.stdout ?? ""),
+    stderr: String(result.stderr ?? result.error?.message ?? ""),
+    exitCode
+  };
+}
+
+function parseGitStatus(output: string): GitStatusEntry[] {
+  const entries: GitStatusEntry[] = [];
+  for (const line of output.split(/\r?\n/u).filter((entry) => entry.length > 0)) {
+    if (line.startsWith("?? ")) {
+      entries.push({ path: line.slice(3), state: "untracked" });
+      continue;
+    }
+    const indexStatus = line[0] ?? " ";
+    const workTreeStatus = line[1] ?? " ";
+    const rawPath = line.slice(3);
+    const state = indexStatus !== " " && workTreeStatus !== " " ? "staged+unstaged" : indexStatus !== " " ? "staged" : "unstaged";
+    for (const filePath of rawPath.split(" -> ")) {
+      if (filePath.trim()) {
+        entries.push({ path: filePath.trim(), state });
+      }
+    }
+  }
+  return entries;
+}
+
+function summarizeFileStates(entries: GitStatusEntry[]): string {
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    counts.set(entry.state, (counts.get(entry.state) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([state, count]) => `${state}=${count}`)
+    .join(", ");
+}
+
+function matchesBranchPattern(branch: string, pattern: string): boolean {
+  if (pattern === branch) {
+    return true;
+  }
+  if (!pattern.includes("*")) {
+    return false;
+  }
+  return globPatternToRegExp(pattern).test(branch);
+}
+
+function matchesProtectedPath(filePath: string, pattern: string): boolean {
+  return globPatternToRegExp(normalizeGitPath(pattern)).test(normalizeGitPath(filePath));
+}
+
+function globPatternToRegExp(pattern: string): RegExp {
+  const normalized = normalizeGitPath(pattern);
+  let source = "";
+  for (let index = 0; index < normalized.length; index += 1) {
+    if (normalized.startsWith("**/", index)) {
+      source += "(?:.*/)?";
+      index += 2;
+      continue;
+    }
+    if (normalized.startsWith("**", index)) {
+      source += ".*";
+      index += 1;
+      continue;
+    }
+    const char = normalized[index];
+    source += char === "*" ? "[^/]*" : escapeRegExp(char);
+  }
+  return new RegExp(`^${source}$`, "iu");
+}
+
+function normalizeGitPath(filePath: string): string {
+  return filePath.replace(/^"|"$/gu, "").replace(/\\/g, "/").replace(/^\.\//u, "");
+}
+
+function normalizeRepoLocator(locator: string): string {
+  let normalized = locator.trim().replace(/^git\+/iu, "");
+  normalized = normalized.replace(/^(https?:\/\/)[^/@\s]+@/iu, "$1");
+  const sshMatch = normalized.match(/^git@([^:]+):(.+)$/iu);
+  if (sshMatch) {
+    normalized = `https://${sshMatch[1]}/${sshMatch[2]}`;
+  }
+  normalized = normalized.replace(/\\/g, "/").replace(/\.git$/iu, "").replace(/\/+$/u, "");
+  if (!/^[a-z][a-z0-9+.-]*:\/\//iu.test(normalized)) {
+    normalized = path.resolve(normalized).replace(/\\/g, "/").replace(/\.git$/iu, "").replace(/\/+$/u, "");
+  }
+  return normalized.toLowerCase();
+}
+
+function sanitizeRepoLocator(locator: string): string {
+  return locator.trim().replace(/^(https?:\/\/)[^/@\s]+@/iu, "$1[redacted]@").replace(/\.git$/iu, "");
+}
+
+function splitLines(value: string): string[] {
+  return value.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+}
+
+function getPublishBlock(value: unknown): {
+  publicRepo?: string;
+  privateRepoPatterns: string[];
+  targetBranch?: string;
+  allowedPublishBranches: string[];
+  protectedPaths: string[];
+} {
+  const publish = isRecord(value) && isRecord(value.publish) ? value.publish : undefined;
+  return {
+    publicRepo: stringRecordValue(publish, "publicRepo"),
+    privateRepoPatterns: stringArrayRecordValue(publish, "privateRepoPatterns"),
+    targetBranch: stringRecordValue(publish, "targetBranch"),
+    allowedPublishBranches: stringArrayRecordValue(publish, "allowedPublishBranches"),
+    protectedPaths: stringArrayRecordValue(publish, "protectedPaths")
+  };
+}
+
+function packageRepositoryUrl(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (typeof value.repository === "string") {
+    return value.repository;
+  }
+  if (isRecord(value.repository)) {
+    return stringRecordValue(value.repository, "url");
+  }
+  return undefined;
+}
+
+async function readJsonFileIfExists(filePath: string): Promise<unknown> {
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.stat(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringRecordValue(value: unknown, key: string): string | undefined {
+  return isRecord(value) && typeof value[key] === "string" && value[key].trim() ? value[key].trim() : undefined;
+}
+
+function stringArrayRecordValue(value: unknown, key: string): string[] {
+  if (!isRecord(value) || !Array.isArray(value[key])) {
+    return [];
+  }
+  return value[key].filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
 function createLatencyTracker(): { mark: (phase: string) => void; phases: () => Record<string, number>; totalMs: () => number } {
@@ -1357,12 +3116,7 @@ function tokenizeExperiment(task: string): string[] {
 }
 
 function normalizeExperimentText(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "")
-    .replace(/Ä‘/g, "d")
-    .replace(/Ä/g, "d")
-    .toLowerCase();
+  return value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
 }
 
 async function runMemory(args: string[]): Promise<void> {
@@ -1508,6 +3262,10 @@ async function runMemorySearch(args: string[]): Promise<void> {
       privacyMode: parsePrivacyMode(stringFlag(flags, "privacy-mode")),
       limit: parseNumberFlag(flags, "limit", 10)
     });
+    if (flags.json) {
+      printCliEnvelope("lmti.memory.search", "pass", [], [], { query, results });
+      return;
+    }
     printSafeJson(results, "memory search");
     return;
   }
@@ -1522,6 +3280,10 @@ async function runMemorySearch(args: string[]): Promise<void> {
   });
   if (flags["include-secret"] || stringFlag(flags, "role")) {
     console.warn("[LMTI] Sensitive memory search requested. Policy enforcement applied.");
+  }
+  if (flags.json) {
+    printCliEnvelope("lmti.memory.search", "pass", [], [], { query, results });
+    return;
   }
   printSafeJson(results, "memory search");
 }
@@ -1573,9 +3335,9 @@ async function runProjectMemoryAdd(args: string[]): Promise<void> {
 
 async function runProjectMemoryRetrieve(args: string[]): Promise<void> {
   const { positional, flags } = parseArgs(args);
-  const task = positional[0];
+  const task = stringFlag(flags, "intent") ?? positional[0];
   if (!task) {
-    throw new Error('Usage: lmti memory retrieve "<task>" [--zone deployment,security] [--limit 8]');
+    throw new Error('Usage: lmti memory retrieve "<task>" or lmti memory retrieve --intent <intent> [--zone deployment,security] [--limit 8]');
   }
 
   const results = await retrieveMemoryForTask(task, {
@@ -1584,6 +3346,14 @@ async function runProjectMemoryRetrieve(args: string[]): Promise<void> {
     privacyMode: parsePrivacyMode(stringFlag(flags, "privacy-mode")),
     limit: parseNumberFlag(flags, "limit", 8)
   });
+  if (flags.json) {
+    printCliEnvelope("lmti.memory.retrieve", "pass", [], [], {
+      intent: task,
+      results,
+      privacy: { secret: "blocked", doNotPrompt: "blocked" }
+    });
+    return;
+  }
   printSafeJson(results, "memory retrieve");
 }
 
@@ -2733,20 +4503,27 @@ const LMTI_SECTION_END = "<!-- LMTI:END -->";
 const LMTI_AGENTS_SECTION = `${LMTI_SECTION_START}
 ## LMTI - Atlas Integration
 
-Codex must treat LMTI as the project mind layer.
+Codex must treat LMTI as the project memory/context layer.
+
+When this repository is installed inside another project, LMTI must be treated
+as an external intelligence layer, not as a module of the host project.
+
+Connected by context, not by runtime ownership.
 
 Before making changes, Codex should:
 
 1. Read .lmti/project.amf.json if available.
 2. Use LMTI context when the task is unclear or touches multiple modules.
-3. Prefer compiled understanding over repeatedly scanning the entire repository.
+3. Prefer compiled understanding and Project Atlas metadata over repeatedly scanning the entire repository.
 4. Respect .lmti privacy rules.
 5. Never expose secret memory or confidential project knowledge in raw form.
 6. After completing a task, summarize what changed and propose safe lesson candidates instead of storing raw chat.
 7. If a task reveals a reusable rule, bug, route, deploy note, permission rule or architecture constraint, prefer \`lmti task done --lesson "..."\` or \`lmti memory lesson propose\`; approve only after privacy/evidence review.
-8. Treat memory as prior belief, not reality. Source code, tests, tool output and explicit user instruction are observations.
+8. Treat memory as prior belief, not reality. Source code, tests, command output and explicit user instruction remain the source of truth.
 9. Use framework detection before planning build/test/risk steps on unfamiliar projects.
 10. Do not bypass LMTI privacy gates, do not widen permissions to make a task pass, and never print secrets.
+11. Do not store raw chat, raw secrets, raw customer data, or unverified hallucinations as memory.
+12. Before publishing, pushing to a public repo, opening a PR, creating a release, or changing a Git remote, always run \`lmti publish check\`. If it returns ERROR/BLOCKED, stop immediately and ask the user to resolve or approve a safe recovery path.
 
 Suggested local command:
 
@@ -2754,6 +4531,7 @@ lmti context "<task>"
 lmti mind context "<task>"
 lmti framework detect
 lmti preflight "<task>" --role developer --model-target external_model
+lmti publish check
 lmti memory lesson candidates
 lmti doctor --security
 ${LMTI_SECTION_END}`;
@@ -2822,6 +4600,98 @@ function printSafeJson(value: unknown, label: string): void {
   console.log(serialized);
 }
 
+function printCliEnvelope(command: string, status: CliStatus | string, warnings: CliBoundaryMessage[], errors: CliBoundaryMessage[], data: unknown): void {
+  printSafeJson(createCliEnvelope(command, status, warnings, errors, data), command);
+}
+
+function createCliEnvelope(command: string, status: CliStatus | string, warnings: CliBoundaryMessage[] = [], errors: CliBoundaryMessage[] = [], data: unknown = {}): CliJsonEnvelope {
+  return {
+    schemaVersion: "lmti.cli.v1",
+    command,
+    status: toCliStatus(status),
+    warnings: warnings.map(cleanBoundaryMessage),
+    errors: errors.map(cleanBoundaryMessage),
+    data: isRecord(data) ? data : { value: data }
+  };
+}
+
+function cleanBoundaryMessage(message: CliBoundaryMessage): CliBoundaryMessage {
+  return {
+    code: message.code,
+    message: message.message,
+    ...(message.suggestion ? { suggestion: message.suggestion } : {})
+  };
+}
+
+function toCliStatus(status: CliStatus | string): CliStatus {
+  if (status === "warning" || status === "warn") {
+    return "warn";
+  }
+  if (status === "blocked" || status === "error" || status === "pass") {
+    return status;
+  }
+  return "error";
+}
+
+function publishResultToCliStatus(status: PublishPreflightResultState): CliStatus {
+  return status === "warning" ? "warn" : status;
+}
+
+function setCliExitCode(status: CliStatus | string): void {
+  process.exitCode = exitCodeForCliStatus(toCliStatus(status));
+}
+
+function exitCodeForCliStatus(status: CliStatus): CliExitCode {
+  switch (status) {
+    case "pass":
+      return 0;
+    case "warn":
+      return 1;
+    case "blocked":
+      return 2;
+    case "error":
+      return 3;
+  }
+}
+
+function writeCliUsage(command: string, usage: string, json: boolean): void {
+  process.exitCode = 4;
+  if (json) {
+    printCliEnvelope(command, "error", [], [{ code: "INVALID_USAGE", message: usage }], {});
+    return;
+  }
+  throw new CliUsageError(usage);
+}
+
+function doctorStatusToCliStatus(status: DoctorReport["status"]): CliStatus {
+  if (status === "ok") {
+    return "pass";
+  }
+  if (status === "warning") {
+    return "warn";
+  }
+  return "blocked";
+}
+
+function doctorProblemMessages(report: DoctorReport, severity: DoctorSeverity): CliBoundaryMessage[] {
+  return report.problems
+    .filter((problem) => problem.severity === severity)
+    .map((problem) => ({
+      code: problem.id.toUpperCase().replace(/[^A-Z0-9]+/gu, "_"),
+      message: problem.message,
+      suggestion: problem.recommendedFix
+    }));
+}
+
+function securityDoctorMessages(report: SecurityDoctorReport, status: SecurityDoctorCheck["status"]): CliBoundaryMessage[] {
+  return report.checks
+    .filter((check) => check.status === status)
+    .map((check) => ({
+      code: check.id.toUpperCase().replace(/[^A-Z0-9]+/gu, "_"),
+      message: check.message
+    }));
+}
+
 function printSafeText(value: string): void {
   const scan = runEgressSecretScan(value);
   if (scan.blocked) {
@@ -2848,12 +4718,29 @@ function printHelp(): void {
 
 Usage:
   lmti init [--yes]
+  lmti check [--json]
+  lmti route "<task>" [--json]
   lmti compile [projectPath]
   lmti migrate [--yes]
   lmti doctor [--fix|--security]
+  lmti doctor --json
   lmti inspect [amfPath]
   lmti context "<task>" [amfPath] [--include-secret]
   lmti preflight "<task>" [amfPath] [--role developer] [--model-target external_model]
+  lmti skill list [--json]
+  lmti skill route "<task>" [--json]
+  lmti skill show <skill-id> [--json]
+  lmti skill validate [--json]
+  lmti thoth <list|route|explain|show|inspect|validate|doctor> [--json]
+  lmti publish check [--target main] [--json] [--strict] [--fix-suggest]
+  lmti publish preflight [--target main] [--json] [--strict] [--fix-suggest]
+  lmti preflight publish [--target main] [--json] [--strict] [--fix-suggest]
+  lmti policy check --action <action> [--json]
+  lmti policy list [--json]
+  lmti config <show|inspect|validate> [--json]
+  lmti agent inspect [--json]
+  lmti agent context --intent <intent> [--json]
+  lmti cleanup check [--json]
   lmti experiment thinking "<task>"
   lmti attach codex
   lmti memory init [--migrate-json]
@@ -2920,12 +4807,21 @@ Usage:
 
 Commands:
   init      Create local .lmti storage.
+  check     Alias for doctor.
+  route     Alias for skill route.
   compile   Compile a project into .lmti/project.amf.json.
   migrate   Copy legacy Atlas state into canonical .lmti storage.
   doctor    Diagnose storage, AMF noise, ignore rules and security posture.
   inspect   Print Project Mind stats from AMF.
   context   Build a Context Pack JSON from AMF and a task.
   preflight Build a policy-safe MVP context package with hard memory gates.
+  publish   Run publish/PR/release safety gates before public workflows.
+  skill     Route tasks to skill.md instructions.
+  thoth     Advanced skill routing and diagnostics.
+  policy    Evaluate risky actions without executing them.
+  config    Inspect LMTI config shape without printing raw values.
+  agent     Provide safe machine-readable agent context.
+  cleanup   Check cleanup readiness without modifying files.
   experiment Run local LMTI experiments.
   attach    Attach local LMTI guidance to Codex.
   memory    Manage local structured ATLAS memory.
@@ -3426,6 +5322,6 @@ if (process.argv[1] && path.basename(process.argv[1]) === "index.js") {
   main(process.argv.slice(2)).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[LMTI] ${message}`);
-    process.exitCode = 1;
+    process.exitCode = error instanceof CliUsageError ? error.exitCode : 3;
   });
 }

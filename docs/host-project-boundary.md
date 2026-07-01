@@ -1,5 +1,7 @@
 # Host Project Boundary
 
+> Status: Local-alpha documentation
+
 LMTI can be installed or attached inside another repository to help AI coding
 agents understand the host project.
 

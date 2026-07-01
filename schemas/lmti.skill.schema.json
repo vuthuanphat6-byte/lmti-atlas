@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cyno.software/lmti/schemas/lmti.skill.schema.json",
+  "title": "LMTI Skill Metadata",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "file",
+    "intents",
+    "requiresPolicy",
+    "requiresMemory",
+    "riskLevel"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "file": {
+      "type": "string",
+      "pattern": "^skills/[a-z0-9-]+/skill\\.md$"
+    },
+    "intents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9_]+$"
+      }
+    },
+    "requiresPolicy": { "type": "boolean" },
+    "requiresMemory": { "type": "boolean" },
+    "riskLevel": { "enum": ["low", "medium", "high"] }
+  }
+}
+

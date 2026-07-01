@@ -1,5 +1,7 @@
 # LMTI Foundation Audit And Plan
 
+> Status: Legacy/research documentation
+
 This document records the current foundation map and the next safe refactor path. LMTI memory is advisory context; source code, tests and command output remain the verification source.
 
 ## Current Map
