@@ -235,7 +235,7 @@ Before making changes, Codex should:
 3. Prefer compiled understanding over repeatedly scanning the entire repository.
 4. Respect .lmti privacy rules.
 5. Never expose secret memory or confidential project knowledge in raw form.
-6. After completing a task, summarize what changed and propose lesson candidates instead of storing raw chat.
+6. After completing a task, summarize what changed and propose safe lesson candidates instead of storing raw chat.
 7. If a task reveals a reusable rule, bug, route, deploy note, permission rule or architecture constraint, prefer `lmti task done --lesson "..."` or `lmti memory lesson propose`; approve only after privacy/evidence review.
 8. Treat memory as prior belief, not reality. Source code, tests, tool output and explicit user instruction are observations.
 9. Use framework detection before planning build/test/risk steps on unfamiliar projects.
