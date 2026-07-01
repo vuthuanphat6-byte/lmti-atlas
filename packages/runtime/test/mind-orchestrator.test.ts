@@ -312,7 +312,7 @@ describe("Mind Orchestrator", () => {
     expect(result.contextPacket.taskHints.join("\n")).toContain("Privacy Gate");
   });
 
-  it("reflects after task and saves only reusable lessons", async () => {
+  it("reflects after task by proposing reusable lessons", async () => {
     const cwd = await createWorkspace();
     const durable = await reflectAfterTask({
       cwd,
@@ -327,7 +327,10 @@ describe("Mind Orchestrator", () => {
       testsRun: ["npm test"]
     });
 
-    expect(durable.actions.some((action) => action.type === "long_memory" && action.status === "created")).toBe(true);
+    const approvedMemory = await searchProjectMemory("dashboard 403 permission lesson", { cwd, privacyMode: "internal" });
+
+    expect(durable.actions.some((action) => action.type === "lesson_candidate" && action.status === "created")).toBe(true);
+    expect(approvedMemory.some((result) => result.item.sourceType === "lesson_candidate")).toBe(false);
     expect(routine.skipped.some((reason) => reason.includes("No reusable memory"))).toBe(true);
   });
 

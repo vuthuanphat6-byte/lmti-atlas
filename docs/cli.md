@@ -99,14 +99,20 @@ node packages/cli/dist/index.js memory init
 node packages/cli/dist/index.js memory add --title "Packing rule" --content "A label can print only after all items are completed."
 node packages/cli/dist/index.js memory search "packing label"
 node packages/cli/dist/index.js memory retrieve "fix packing label bug"
-node packages/cli/dist/index.js memory lesson --task "Packing fix" --lesson "Verify label-group completion before printing."
+node packages/cli/dist/index.js memory lesson propose --task "Packing fix" --lesson "Verify label-group completion before printing." --files-touched src/orders/packing.ts:modified --commands "npm test:0" --tests "npm test:pass" --outcome pass
+node packages/cli/dist/index.js memory lesson candidates
+node packages/cli/dist/index.js memory lesson show <candidateId>
+node packages/cli/dist/index.js memory lesson approve <candidateId>
+node packages/cli/dist/index.js memory lesson reject <candidateId>
 node packages/cli/dist/index.js memory stats
 node packages/cli/dist/index.js memory privacy-check
 node packages/cli/dist/index.js memory context "fix packing label bug"
 ```
 
-Privacy note: memory writes and retrieval pass through privacy checks. Do not
-store raw secrets.
+Privacy note: memory writes and retrieval pass through privacy checks. Lesson
+proposal is Level 2 only: it does not train a model, does not store raw diffs,
+and does not auto-approve candidates. Pending lesson candidates are not
+included in context retrieval.
 
 Short memory:
 
@@ -133,9 +139,16 @@ node packages/cli/dist/index.js memory explain "partner permission route"
 ## Task And Lesson Commands
 
 ```bash
-node packages/cli/dist/index.js remember --kind lesson --title "Route rule" --content "Partner users route through /partner." --tags routing,permission --prompt-policy summarize_only
+node packages/cli/dist/index.js remember --kind rule --title "Route rule" --content "Partner users route through /partner." --tags routing,permission --prompt-policy summarize_only
 node packages/cli/dist/index.js task done --title "Partner route fix" --summary "Confirmed routing behavior." --lesson "Partner users route through /partner."
+node packages/cli/dist/index.js memory lesson candidates --approval-status pending
+node packages/cli/dist/index.js memory lesson approve <candidateId>
 ```
+
+`task done --lesson` and `memory lesson propose` create lesson candidates.
+Approval is a separate step so a privacy warning, weak evidence, or low
+confidence score does not become long-term memory automatically. `remember` is
+for deliberate non-lesson memory such as rules and decisions.
 
 ## Experimental Framework Commands
 

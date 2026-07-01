@@ -61,13 +61,36 @@ The current preflight path uses a metadata-first gate:
 6. Run egress scan.
 7. Deliver only if adapter sandbox allows it.
 
+## Lesson Candidate Gate
+
+The Level 2 lesson pipeline proposes candidate lessons after a task. It is not
+self-training and it is not automatic long-term memory.
+
+Current rules:
+
+- Store sanitized task observations and evidence summaries, not raw transcripts
+  or raw diffs.
+- If a diff matters, store only file/change summaries and source refs.
+- Default suspicious content to `privacy_status=blocked` and
+  `approval_status=needs_review`.
+- Score confidence from source refs, files touched, command exit codes, passing
+  tests, user decisions, repeated patterns, and privacy status.
+- Penalize candidates based only on agent summary, partial or unknown outcomes,
+  and privacy warnings.
+- Do not include pending or rejected candidates in context retrieval.
+- Convert a candidate into long-term project memory only after explicit
+  approval.
+- `lmti doctor --security` may warn about pending or risky candidates, but it
+  must not approve them.
+
 ## Test Expectations
 
 Changes to privacy-sensitive code should test:
 
 - Secret-like strings are redacted or blocked.
 - Blocked memory is not ranked as context.
+- Pending lesson candidates are not ranked as context.
+- Privacy-blocked lesson candidates cannot be approved.
 - External model targets receive summaries instead of raw confidential content.
 - CLI output does not print raw secrets.
 - Adapter manifests cannot request direct memory or secret access in the MVP.
-

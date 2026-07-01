@@ -80,8 +80,10 @@ supported delivery paths yet.
 
 ### Lesson Capture
 
-After a task, durable lessons can be recorded through `lmti task done` or
-`lmti memory lesson`. Lessons should be short, safe, and reusable.
+After a task, lesson candidates can be proposed through `lmti task done
+--lesson ...` or `lmti memory lesson propose`. A candidate becomes durable
+project memory only after privacy checks, evidence review, confidence scoring,
+and explicit approval. Lessons should be short, safe, and reusable.
 
 ## Package Boundaries
 

@@ -12,7 +12,7 @@ Adapters should:
 - Respect privacy and model-target rules.
 - Run preflight before context delivery when needed.
 - Avoid direct raw memory-store access.
-- Capture safe lessons after a task when explicitly requested.
+- Propose safe lesson candidates after a task when explicitly requested.
 - Keep agent-specific behavior outside the core memory and privacy packages.
 
 ## Conceptual Interface
@@ -23,7 +23,7 @@ interface AgentAdapter {
   capabilities: AgentCapabilityProfile;
   buildContext(task: AgentTask): Promise<AgentContext>;
   runPreflight?(options: PreflightOptions): Promise<PreflightResult>;
-  captureLesson?(lesson: LessonInput): Promise<void>;
+  proposeLesson?(lesson: LessonInput): Promise<void>;
 }
 ```
 
@@ -68,4 +68,3 @@ priority workflow.
 - Add package-level adapter APIs.
 - Add more agent-specific smoke tests.
 - Add local dashboard or terminal review for adapter output.
-

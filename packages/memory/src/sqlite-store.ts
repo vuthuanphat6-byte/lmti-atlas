@@ -2,8 +2,23 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { redactText } from "@atlas/privacy";
-import type { MemoryRecord } from "@atlas/types";
+import { redactText, runEgressSecretScan } from "@atlas/privacy";
+import type {
+  CommandRunSummary,
+  DecisionSummary,
+  ErrorSummary,
+  Evidence,
+  FileTouchSummary,
+  LessonApprovalStatus,
+  LessonCandidate,
+  LessonCandidateType,
+  MemoryRecord,
+  SourceRef,
+  TaskObservation,
+  TaskObservationPrivacyStatus,
+  TaskOutcome,
+  TestRunSummary
+} from "@atlas/types";
 import { clamp01, normalizeMemoryText, round, tokenizeMemoryText } from "./encode";
 import {
   classifyLibraryMemory,
@@ -185,14 +200,47 @@ export interface MemoryContextForTaskResult {
   warnings: string[];
 }
 
-export interface SaveLessonAfterTaskInput {
-  task: string;
-  whatChanged?: string;
-  bugFound?: string;
-  fixApplied?: string;
-  lesson: string;
-  filesTouched?: string[];
-  risk?: string;
+export interface TaskObservationInput {
+  taskId?: string;
+  taskTitle: string;
+  taskSummary?: string;
+  agent?: string;
+  filesTouched?: FileTouchSummary[];
+  commandsRun?: CommandRunSummary[];
+  tests?: TestRunSummary[];
+  errors?: ErrorSummary[];
+  decisions?: DecisionSummary[];
+  outcome?: TaskOutcome;
+  sourceRefs?: SourceRef[];
+}
+
+export interface LessonProposalInput {
+  observation: TaskObservationInput;
+  agentProposedLesson?: string;
+  lessonType?: LessonCandidateType;
+  title?: string;
+  appliesTo?: string[];
+  suggestedVerification?: string[];
+}
+
+export interface LessonProposalResult {
+  observation: TaskObservation;
+  candidate: LessonCandidate;
+}
+
+export interface LessonCandidateListOptions {
+  approvalStatus?: LessonApprovalStatus;
+  privacyStatus?: TaskObservationPrivacyStatus;
+  limit?: number;
+}
+
+export interface LessonCandidateReviewSummary {
+  total: number;
+  pending: number;
+  needsReview: number;
+  privacyWarnings: number;
+  missingEvidence: number;
+  highConfidencePending: number;
 }
 
 export interface ProjectMemoryStats {
@@ -259,7 +307,43 @@ interface ShortMemoryRow {
   bm25?: number;
 }
 
-const SCHEMA_VERSION = 3;
+interface TaskObservationRow {
+  id: string;
+  task_title: string;
+  task_summary: string | null;
+  agent: string | null;
+  files_touched: string;
+  commands_run: string;
+  tests: string;
+  errors: string;
+  decisions: string;
+  outcome: string;
+  privacy_scan_status: string;
+  source_refs: string;
+  created_at: string;
+}
+
+interface LessonCandidateRow {
+  id: string;
+  task_id: string;
+  lesson_type: string;
+  title: string;
+  summary: string;
+  lesson: string;
+  applies_to: string;
+  source_refs: string;
+  evidence: string;
+  confidence: number;
+  privacy_status: string;
+  approval_status: string;
+  verify_required: number;
+  suggested_verification: string;
+  last_verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+const SCHEMA_VERSION = 4;
 const DEFAULT_RETRIEVE_LIMIT = 8;
 const DEFAULT_SHORT_MEMORY_LIMIT = 8;
 const SHORT_MEMORY_PROMOTE_SUGGEST_THRESHOLD = 0.75;
@@ -860,57 +944,254 @@ export async function retrieveMemoryForTask(
   });
 }
 
-export async function saveLessonAfterTask(
-  input: SaveLessonAfterTaskInput,
+async function storeTaskObservation(
+  input: TaskObservationInput,
   options: { cwd?: string; now?: Date } = {}
-): Promise<{ lesson: ProjectMemoryItem; linked: Array<{ fromMemoryId: string; toMemoryId: string; relationType: string }> }> {
-  const content = [
-    `Task: ${input.task}`,
-    input.whatChanged ? `What changed: ${input.whatChanged}` : undefined,
-    input.bugFound ? `Bug found: ${input.bugFound}` : undefined,
-    input.fixApplied ? `Fix applied: ${input.fixApplied}` : undefined,
-    `Lesson: ${input.lesson}`,
-    input.filesTouched && input.filesTouched.length > 0 ? `Files touched: ${input.filesTouched.join(", ")}` : undefined,
-    input.risk ? `Risk: ${input.risk}` : undefined
-  ].filter(Boolean).join("\n");
-  const normalized = normalizeMemoryText(content);
-  const productionOrSecurity = /\b(production|security|permission|secret|deploy|403|incident)\b/i.test(normalized);
-  const lesson = await addProjectMemory(
-    {
-      title: input.task,
-      content,
-      source: "post-task",
-      sourceType: "lesson",
-      tags: normalizeLibraryTags(["lesson", "post-task", ...(input.filesTouched ?? []).flatMap((file) => tokenizeMemoryText(file).slice(0, 2))]),
-      zone: "lesson",
-      importance: productionOrSecurity ? 0.95 : 0.82,
-      confidence: 0.75
-    },
-    options
-  );
-
-  const related = await retrieveMemoryForTask(input.task, {
-    cwd: options.cwd,
-    limit: 5,
-    privacyMode: "safe",
-    zones: ["security", "workflow", "codebase", "incident", "business", "deployment"]
-  });
-  const dbPath = (await initProjectMemoryStorage(options.cwd ?? process.cwd())).dbPath;
+): Promise<TaskObservation> {
+  const cwd = options.cwd ?? process.cwd();
+  const now = (options.now ?? new Date()).toISOString();
+  const dbPath = (await initProjectMemoryStorage(cwd)).dbPath;
+  const observation = sanitizeTaskObservation(input, now);
   const db = await openProjectMemoryDatabase(dbPath);
-  const linked: Array<{ fromMemoryId: string; toMemoryId: string; relationType: string }> = [];
   try {
-    for (const result of related) {
-      if (result.item.id === lesson.id) {
-        continue;
-      }
-      linkProjectMemoriesSync(db, lesson.id, result.item.id, "related_to");
-      linked.push({ fromMemoryId: lesson.id, toMemoryId: result.item.id, relationType: "related_to" });
+    db.prepare(`
+      INSERT OR REPLACE INTO task_observations (
+        id, task_title, task_summary, agent, files_touched, commands_run,
+        tests, errors, decisions, outcome, privacy_scan_status, source_refs,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      observation.taskId,
+      observation.taskTitle,
+      observation.taskSummary ?? null,
+      observation.agent ?? null,
+      JSON.stringify(observation.filesTouched),
+      JSON.stringify(observation.commandsRun),
+      JSON.stringify(observation.tests),
+      JSON.stringify(observation.errors),
+      JSON.stringify(observation.decisions),
+      observation.outcome,
+      observation.privacyScanStatus,
+      JSON.stringify(observation.sourceRefs),
+      observation.createdAt
+    );
+    return observation;
+  } finally {
+    db.close();
+  }
+}
+
+export async function proposeLessonCandidate(
+  input: LessonProposalInput,
+  options: { cwd?: string; now?: Date } = {}
+): Promise<LessonProposalResult> {
+  const cwd = options.cwd ?? process.cwd();
+  const now = (options.now ?? new Date()).toISOString();
+  const observation = await storeTaskObservation(input.observation, { cwd, now: options.now });
+  const evidence = buildEvidence(observation, input.agentProposedLesson);
+  const privacyStatus = strongestPrivacyStatus(observation.privacyScanStatus, privacyStatusForCandidate(input, evidence));
+  const lesson = createCandidateLesson(observation, input.agentProposedLesson);
+  const title = sanitizeText(input.title ?? observation.taskTitle, 120);
+  const appliesTo = sanitizeStringList(input.appliesTo?.length ? input.appliesTo : [
+    ...observation.filesTouched.map((file) => file.path),
+    ...observation.sourceRefs.map((ref) => ref.ref)
+  ], 20, 160);
+  const confidence = scoreLessonCandidate({
+    observation,
+    evidence,
+    privacyStatus,
+    onlyAgentSummary: isOnlyAgentSummary(evidence)
+  });
+  const suggestedVerification = createSuggestedVerification(observation, confidence, privacyStatus, input.suggestedVerification);
+  const verifyRequired = confidence < 0.8 || observation.outcome !== "pass" || !observation.tests.some((test) => test.status === "pass") || privacyStatus !== "pass";
+  const approvalStatus: LessonApprovalStatus = privacyStatus === "blocked" || confidence < 0.2 ? "needs_review" : "pending";
+  const candidate: LessonCandidate = {
+    id: randomUUID(),
+    taskId: observation.taskId,
+    lessonType: input.lessonType ?? inferLessonType(observation, lesson),
+    title,
+    summary: sanitizeText(observation.taskSummary ?? observation.taskTitle, 500),
+    lesson,
+    appliesTo,
+    sourceRefs: observation.sourceRefs,
+    evidence,
+    confidence,
+    privacyStatus,
+    approvalStatus,
+    verifyRequired,
+    suggestedVerification,
+    lastVerifiedAt: null,
+    createdAt: now,
+    updatedAt: now
+  };
+
+  const dbPath = (await initProjectMemoryStorage(cwd)).dbPath;
+  const db = await openProjectMemoryDatabase(dbPath);
+  try {
+    insertLessonCandidateSync(db, candidate);
+    appendProjectMemoryEvent(db, undefined, "lesson_candidate.created", {
+      candidateId: candidate.id,
+      taskId: candidate.taskId,
+      privacyStatus: candidate.privacyStatus,
+      approvalStatus: candidate.approvalStatus,
+      confidence: candidate.confidence,
+      evidence: candidate.evidence.map((entry) => ({ type: entry.type, ref: entry.ref }))
+    });
+    return { observation, candidate };
+  } finally {
+    db.close();
+  }
+}
+
+export async function listLessonCandidates(
+  options: LessonCandidateListOptions & { cwd?: string } = {}
+): Promise<LessonCandidate[]> {
+  const cwd = options.cwd ?? process.cwd();
+  const dbPath = (await initProjectMemoryStorage(cwd)).dbPath;
+  const db = await openProjectMemoryDatabase(dbPath);
+  try {
+    const where: string[] = [];
+    const params: SqliteValue[] = [];
+    if (options.approvalStatus) {
+      where.push("approval_status = ?");
+      params.push(options.approvalStatus);
     }
+    if (options.privacyStatus) {
+      where.push("privacy_status = ?");
+      params.push(options.privacyStatus);
+    }
+    params.push(options.limit ?? 20);
+    const rows = db.prepare(`
+      SELECT * FROM lesson_candidates
+      ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(...params) as unknown as LessonCandidateRow[];
+    return rows.map(rowToLessonCandidate);
+  } finally {
+    db.close();
+  }
+}
+
+export async function getLessonCandidate(
+  id: string,
+  options: { cwd?: string } = {}
+): Promise<LessonCandidate | undefined> {
+  const cwd = options.cwd ?? process.cwd();
+  const dbPath = (await initProjectMemoryStorage(cwd)).dbPath;
+  const db = await openProjectMemoryDatabase(dbPath);
+  try {
+    return getLessonCandidateSync(db, id);
+  } finally {
+    db.close();
+  }
+}
+
+export async function approveLessonCandidate(
+  id: string,
+  options: { cwd?: string; now?: Date } = {}
+): Promise<{ candidate: LessonCandidate; memory: ProjectMemoryItem }> {
+  const cwd = options.cwd ?? process.cwd();
+  const now = (options.now ?? new Date()).toISOString();
+  const dbPath = (await initProjectMemoryStorage(cwd)).dbPath;
+  const db = await openProjectMemoryDatabase(dbPath);
+  try {
+    const candidate = getLessonCandidateSync(db, id);
+    if (!candidate) {
+      throw new Error(`Lesson candidate not found: ${id}`);
+    }
+    const existingMemory = getProjectMemoryItemBySourceSync(db, `lesson_candidate:${candidate.id}`);
+    if (candidate.approvalStatus === "approved" && existingMemory) {
+      return { candidate, memory: existingMemory };
+    }
+    assertCandidateCanBeApproved(candidate);
   } finally {
     db.close();
   }
 
-  return { lesson, linked };
+  const candidate = await getLessonCandidate(id, { cwd });
+  if (!candidate) {
+    throw new Error(`Lesson candidate not found: ${id}`);
+  }
+  const memory = await addProjectMemory(
+    {
+      title: candidate.title,
+      content: lessonCandidateToMemoryContent(candidate),
+      source: `lesson_candidate:${candidate.id}`,
+      sourceType: "lesson_candidate",
+      tags: normalizeLibraryTags(["lesson", "approved", candidate.lessonType, ...candidate.appliesTo.flatMap((value) => tokenizeMemoryText(value).slice(0, 2))]),
+      zone: "lesson",
+      privacyLevel: candidate.privacyStatus === "pass" ? "internal" : "private",
+      confidence: candidate.confidence,
+      importance: candidate.confidence >= 0.8 ? 0.9 : 0.75
+    },
+    { cwd, now: options.now }
+  );
+
+  const updateDb = await openProjectMemoryDatabase(dbPath);
+  try {
+    updateDb.prepare(`
+      UPDATE lesson_candidates
+      SET approval_status = 'approved',
+          updated_at = ?
+      WHERE id = ?
+    `).run(now, candidate.id);
+    appendProjectMemoryEvent(updateDb, memory.id, "lesson_candidate.approved", {
+      candidateId: candidate.id,
+      confidence: candidate.confidence,
+      privacyStatus: candidate.privacyStatus
+    });
+    const approved = getLessonCandidateSync(updateDb, id);
+    if (!approved) {
+      throw new Error(`Lesson candidate not found after approval: ${id}`);
+    }
+    return { candidate: approved, memory };
+  } finally {
+    updateDb.close();
+  }
+}
+
+export async function rejectLessonCandidate(
+  id: string,
+  options: { cwd?: string; now?: Date } = {}
+): Promise<LessonCandidate> {
+  const cwd = options.cwd ?? process.cwd();
+  const now = (options.now ?? new Date()).toISOString();
+  const dbPath = (await initProjectMemoryStorage(cwd)).dbPath;
+  const db = await openProjectMemoryDatabase(dbPath);
+  try {
+    const candidate = getLessonCandidateSync(db, id);
+    if (!candidate) {
+      throw new Error(`Lesson candidate not found: ${id}`);
+    }
+    db.prepare(`
+      UPDATE lesson_candidates
+      SET approval_status = 'rejected',
+          updated_at = ?
+      WHERE id = ?
+    `).run(now, id);
+    appendProjectMemoryEvent(db, undefined, "lesson_candidate.rejected", { candidateId: id });
+    const rejected = getLessonCandidateSync(db, id);
+    if (!rejected) {
+      throw new Error(`Lesson candidate not found after rejection: ${id}`);
+    }
+    return rejected;
+  } finally {
+    db.close();
+  }
+}
+
+export async function getLessonCandidateReviewSummary(options: { cwd?: string } = {}): Promise<LessonCandidateReviewSummary> {
+  const cwd = options.cwd ?? process.cwd();
+  const candidates = await listLessonCandidates({ cwd, limit: 500 });
+  return {
+    total: candidates.length,
+    pending: candidates.filter((candidate) => candidate.approvalStatus === "pending").length,
+    needsReview: candidates.filter((candidate) => candidate.approvalStatus === "needs_review").length,
+    privacyWarnings: candidates.filter((candidate) => candidate.privacyStatus !== "pass").length,
+    missingEvidence: candidates.filter((candidate) => candidate.evidence.length === 0).length,
+    highConfidencePending: candidates.filter((candidate) => candidate.confidence >= 0.8 && candidate.approvalStatus === "pending").length
+  };
 }
 
 export async function getProjectMemoryStats(options: { cwd?: string } = {}): Promise<ProjectMemoryStats> {
@@ -1161,6 +1442,47 @@ function applyProjectMemorySchema(db: DatabaseSync): void {
       created_at TEXT NOT NULL,
       FOREIGN KEY (note_id) REFERENCES short_memory_notes(id) ON DELETE SET NULL
     );
+
+    CREATE TABLE IF NOT EXISTS task_observations (
+      id TEXT PRIMARY KEY,
+      task_title TEXT NOT NULL,
+      task_summary TEXT,
+      agent TEXT,
+      files_touched TEXT NOT NULL DEFAULT '[]',
+      commands_run TEXT NOT NULL DEFAULT '[]',
+      tests TEXT NOT NULL DEFAULT '[]',
+      errors TEXT NOT NULL DEFAULT '[]',
+      decisions TEXT NOT NULL DEFAULT '[]',
+      outcome TEXT NOT NULL CHECK (outcome IN ('pass','fail','partial','unknown')),
+      privacy_scan_status TEXT NOT NULL CHECK (privacy_scan_status IN ('pass','warning','blocked')),
+      source_refs TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS lesson_candidates (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      lesson_type TEXT NOT NULL CHECK (lesson_type IN ('bug_fix','architecture','security','testing','deployment','workflow','permission','data_model','cli','other')),
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      lesson TEXT NOT NULL,
+      applies_to TEXT NOT NULL DEFAULT '[]',
+      source_refs TEXT NOT NULL DEFAULT '[]',
+      evidence TEXT NOT NULL DEFAULT '[]',
+      confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+      privacy_status TEXT NOT NULL CHECK (privacy_status IN ('pass','warning','blocked')),
+      approval_status TEXT NOT NULL CHECK (approval_status IN ('pending','approved','rejected','needs_review')),
+      verify_required INTEGER NOT NULL DEFAULT 1,
+      suggested_verification TEXT NOT NULL DEFAULT '[]',
+      last_verified_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (task_id) REFERENCES task_observations(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_lesson_candidates_approval ON lesson_candidates(approval_status);
+    CREATE INDEX IF NOT EXISTS idx_lesson_candidates_privacy ON lesson_candidates(privacy_status);
+    CREATE INDEX IF NOT EXISTS idx_lesson_candidates_task ON lesson_candidates(task_id);
   `);
   db.prepare("INSERT OR IGNORE INTO memory_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
     1,
@@ -1176,6 +1498,11 @@ function applyProjectMemorySchema(db: DatabaseSync): void {
   db.prepare("INSERT OR IGNORE INTO memory_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
     3,
     "memory_content_hashes",
+    new Date().toISOString()
+  );
+  db.prepare("INSERT OR IGNORE INTO memory_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
+    4,
+    "lesson_proposal_pipeline",
     new Date().toISOString()
   );
 }
@@ -1301,6 +1628,11 @@ function insertShortMemoryNote(db: DatabaseSync, note: ShortMemoryNote): void {
 
 function getProjectMemoryItemSync(db: DatabaseSync, id: string): ProjectMemoryItem | undefined {
   const row = db.prepare("SELECT * FROM memory_items WHERE id = ?").get(id) as unknown as ProjectMemoryRow | undefined;
+  return row ? rowToProjectMemoryItem(row) : undefined;
+}
+
+function getProjectMemoryItemBySourceSync(db: DatabaseSync, source: string): ProjectMemoryItem | undefined {
+  const row = db.prepare("SELECT * FROM memory_items WHERE source = ? AND status != 'deleted' LIMIT 1").get(source) as unknown as ProjectMemoryRow | undefined;
   return row ? rowToProjectMemoryItem(row) : undefined;
 }
 
@@ -1589,6 +1921,414 @@ function rowToShortMemoryNote(row: ShortMemoryRow): ShortMemoryNote {
     accessCount: Number(row.access_count ?? 0),
     reasons: safeJsonArray(row.reasons ?? "[]")
   };
+}
+
+function rowToTaskObservation(row: TaskObservationRow): TaskObservation {
+  return {
+    taskId: row.id,
+    taskTitle: row.task_title,
+    taskSummary: row.task_summary ?? undefined,
+    agent: row.agent ?? undefined,
+    filesTouched: safeJsonValue<FileTouchSummary[]>(row.files_touched, []),
+    commandsRun: safeJsonValue<CommandRunSummary[]>(row.commands_run, []),
+    tests: safeJsonValue<TestRunSummary[]>(row.tests, []),
+    errors: safeJsonValue<ErrorSummary[]>(row.errors, []),
+    decisions: safeJsonValue<DecisionSummary[]>(row.decisions, []),
+    outcome: isTaskOutcome(row.outcome) ? row.outcome : "unknown",
+    privacyScanStatus: isPrivacyStatus(row.privacy_scan_status) ? row.privacy_scan_status : "warning",
+    sourceRefs: safeJsonValue<SourceRef[]>(row.source_refs, []),
+    createdAt: row.created_at
+  };
+}
+
+function rowToLessonCandidate(row: LessonCandidateRow): LessonCandidate {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    lessonType: isLessonType(row.lesson_type) ? row.lesson_type : "other",
+    title: row.title,
+    summary: row.summary,
+    lesson: row.lesson,
+    appliesTo: safeJsonArray(row.applies_to),
+    sourceRefs: safeJsonValue<SourceRef[]>(row.source_refs, []),
+    evidence: safeJsonValue<Evidence[]>(row.evidence, []),
+    confidence: round(clamp01(Number(row.confidence))),
+    privacyStatus: isPrivacyStatus(row.privacy_status) ? row.privacy_status : "warning",
+    approvalStatus: isApprovalStatus(row.approval_status) ? row.approval_status : "needs_review",
+    verifyRequired: Boolean(row.verify_required),
+    suggestedVerification: safeJsonArray(row.suggested_verification),
+    lastVerifiedAt: row.last_verified_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function insertLessonCandidateSync(db: DatabaseSync, candidate: LessonCandidate): void {
+  db.prepare(`
+    INSERT INTO lesson_candidates (
+      id, task_id, lesson_type, title, summary, lesson, applies_to, source_refs,
+      evidence, confidence, privacy_status, approval_status, verify_required,
+      suggested_verification, last_verified_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    candidate.id,
+    candidate.taskId,
+    candidate.lessonType,
+    candidate.title,
+    candidate.summary,
+    candidate.lesson,
+    JSON.stringify(candidate.appliesTo),
+    JSON.stringify(candidate.sourceRefs),
+    JSON.stringify(candidate.evidence),
+    candidate.confidence,
+    candidate.privacyStatus,
+    candidate.approvalStatus,
+    candidate.verifyRequired ? 1 : 0,
+    JSON.stringify(candidate.suggestedVerification),
+    candidate.lastVerifiedAt,
+    candidate.createdAt,
+    candidate.updatedAt
+  );
+}
+
+function getLessonCandidateSync(db: DatabaseSync, id: string): LessonCandidate | undefined {
+  const row = db.prepare("SELECT * FROM lesson_candidates WHERE id = ?").get(id) as unknown as LessonCandidateRow | undefined;
+  return row ? rowToLessonCandidate(row) : undefined;
+}
+
+function sanitizeTaskObservation(input: TaskObservationInput, now: string): TaskObservation {
+  const rawPrivacy = privacyStatusForRawInput(input);
+  const filesTouched = (input.filesTouched ?? []).map(sanitizeFileTouchSummary);
+  const commandsRun = (input.commandsRun ?? []).map(sanitizeCommandRunSummary);
+  const tests = (input.tests ?? []).map(sanitizeTestRunSummary);
+  const errors = (input.errors ?? []).map(sanitizeErrorSummary);
+  const decisions = (input.decisions ?? []).map(sanitizeDecisionSummary);
+  const sourceRefs = (input.sourceRefs ?? []).map(sanitizeSourceRef);
+  const sanitizedPrivacy = privacyStatusForRawInput({ filesTouched, commandsRun, tests, errors, decisions, sourceRefs });
+  return {
+    taskId: sanitizeIdentifier(input.taskId) ?? randomUUID(),
+    taskTitle: sanitizeText(input.taskTitle, 160) || "Untitled task",
+    taskSummary: input.taskSummary ? sanitizeText(input.taskSummary, 800) : undefined,
+    agent: input.agent ? sanitizeText(input.agent, 80) : undefined,
+    filesTouched,
+    commandsRun,
+    tests,
+    errors,
+    decisions,
+    outcome: input.outcome ?? "unknown",
+    privacyScanStatus: strongestPrivacyStatus(rawPrivacy, sanitizedPrivacy),
+    sourceRefs,
+    createdAt: now
+  };
+}
+
+function sanitizeFileTouchSummary(input: FileTouchSummary): FileTouchSummary {
+  return {
+    path: sanitizePath(input.path),
+    changeType: isFileChangeType(input.changeType) ? input.changeType : "modified",
+    changeSummary: input.changeSummary ? sanitizeText(input.changeSummary, 500) : undefined,
+    riskLevel: input.riskLevel
+  };
+}
+
+function sanitizeCommandRunSummary(input: CommandRunSummary): CommandRunSummary {
+  return {
+    command: sanitizeText(input.command, 240),
+    exitCode: typeof input.exitCode === "number" ? input.exitCode : null,
+    status: isRunStatus(input.status) ? input.status : "unknown",
+    outputSummary: input.outputSummary ? sanitizeText(input.outputSummary, 600) : undefined,
+    outputRedacted: true
+  };
+}
+
+function sanitizeTestRunSummary(input: TestRunSummary): TestRunSummary {
+  return {
+    name: sanitizeText(input.name, 160) || "test",
+    status: isRunStatus(input.status) ? input.status : "unknown",
+    command: input.command ? sanitizeText(input.command, 240) : undefined,
+    summary: input.summary ? sanitizeText(input.summary, 500) : undefined
+  };
+}
+
+function sanitizeErrorSummary(input: ErrorSummary): ErrorSummary {
+  return {
+    message: sanitizeText(input.message, 500),
+    source: input.source ? sanitizeText(input.source, 160) : undefined,
+    severity: input.severity
+  };
+}
+
+function sanitizeDecisionSummary(input: DecisionSummary): DecisionSummary {
+  return {
+    decision: sanitizeText(input.decision, 500),
+    reason: input.reason ? sanitizeText(input.reason, 500) : undefined,
+    source: input.source ? sanitizeText(input.source, 160) : undefined
+  };
+}
+
+function sanitizeSourceRef(input: SourceRef): SourceRef {
+  return {
+    ref: sanitizePath(input.ref),
+    kind: input.kind ?? "other"
+  };
+}
+
+function buildEvidence(observation: TaskObservation, agentProposedLesson?: string): Evidence[] {
+  const evidence: Evidence[] = [];
+  for (const file of observation.filesTouched) {
+    evidence.push({
+      type: "file_changed",
+      ref: file.path,
+      summary: file.changeSummary ?? `${file.changeType} ${file.path}`,
+      confidence: file.riskLevel === "high" ? 0.7 : 0.8
+    });
+  }
+  for (const command of observation.commandsRun) {
+    evidence.push({
+      type: "command_exit_code",
+      ref: command.command,
+      summary: `Command finished with ${command.exitCode === null ? "unknown exit code" : `exit code ${command.exitCode}`}.`,
+      confidence: command.exitCode === 0 ? 0.85 : 0.55
+    });
+  }
+  for (const test of observation.tests) {
+    evidence.push({
+      type: test.status === "pass" ? "test_passed" : "test_failed",
+      ref: test.command ?? test.name,
+      summary: test.summary ?? `${test.name} ${test.status}.`,
+      confidence: test.status === "pass" ? 0.9 : 0.65
+    });
+  }
+  for (const error of observation.errors) {
+    evidence.push({
+      type: "error_observed",
+      ref: error.source ?? "task_error",
+      summary: error.message,
+      confidence: error.severity === "high" ? 0.75 : 0.6
+    });
+  }
+  for (const decision of observation.decisions) {
+    evidence.push({
+      type: "user_instruction",
+      ref: decision.source ?? "decision",
+      summary: decision.reason ? `${decision.decision} (${decision.reason})` : decision.decision,
+      confidence: 0.72
+    });
+  }
+  if (agentProposedLesson?.trim()) {
+    evidence.push({
+      type: "agent_summary",
+      ref: "agent_proposed_lesson",
+      summary: sanitizeText(agentProposedLesson, 500),
+      confidence: 0.35
+    });
+  }
+  evidence.push({
+    type: "privacy_check",
+    ref: "lmti_privacy_gate",
+    summary: observation.privacyScanStatus === "pass" ? "Privacy gate passed." : `Privacy gate returned ${observation.privacyScanStatus}.`,
+    confidence: observation.privacyScanStatus === "pass" ? 0.8 : 0.5
+  });
+  return evidence.map((entry) => ({
+    ...entry,
+    ref: sanitizeText(entry.ref, 240),
+    summary: sanitizeText(entry.summary, 600),
+    confidence: round(clamp01(entry.confidence))
+  }));
+}
+
+function createCandidateLesson(observation: TaskObservation, agentProposedLesson?: string): string {
+  if (agentProposedLesson?.trim()) {
+    return sanitizeText(agentProposedLesson, 900);
+  }
+  if (observation.decisions[0]) {
+    return sanitizeText(`Reuse this decision after similar tasks: ${observation.decisions[0].decision}`, 900);
+  }
+  if (observation.errors[0] && observation.tests.some((test) => test.status === "pass")) {
+    return sanitizeText(`When this error appears again, verify the affected files and rerun the passing test before treating it as fixed: ${observation.errors[0].message}`, 900);
+  }
+  const files = observation.filesTouched.map((file) => file.path).slice(0, 3).join(", ");
+  const tests = observation.tests.filter((test) => test.status === "pass").map((test) => test.command ?? test.name).slice(0, 2).join(", ");
+  if (files && tests) {
+    return sanitizeText(`When changing ${files}, verify the behavior with ${tests} before recording the task as complete.`, 900);
+  }
+  return sanitizeText(`Review evidence from "${observation.taskTitle}" before turning this task pattern into durable project memory.`, 900);
+}
+
+function scoreLessonCandidate(input: {
+  observation: TaskObservation;
+  evidence: Evidence[];
+  privacyStatus: TaskObservationPrivacyStatus;
+  onlyAgentSummary: boolean;
+}): number {
+  let score = 0;
+  if (input.observation.tests.some((test) => test.status === "pass")) score += 0.25;
+  if (input.observation.filesTouched.length > 0 || input.observation.sourceRefs.length > 0) score += 0.2;
+  if (input.observation.commandsRun.some((command) => command.exitCode === 0)) score += 0.2;
+  if (input.observation.decisions.length > 0 || input.observation.sourceRefs.some((ref) => ref.kind === "user")) score += 0.15;
+  if (input.privacyStatus === "pass") score += 0.1;
+  if (input.onlyAgentSummary) score -= 0.3;
+  if (input.observation.outcome === "partial" || input.observation.outcome === "unknown") score -= 0.4;
+  if (input.observation.outcome === "fail") score -= 0.25;
+  if (input.privacyStatus === "warning") score -= 0.6;
+  if (input.privacyStatus === "blocked") score = Math.min(score - 0.8, 0.19);
+  if (input.evidence.length === 0) score -= 0.4;
+  return round(clamp01(score));
+}
+
+function createSuggestedVerification(
+  observation: TaskObservation,
+  confidence: number,
+  privacyStatus: TaskObservationPrivacyStatus,
+  requested?: string[]
+): string[] {
+  const steps = new Set<string>(sanitizeStringList(requested ?? [], 12, 80));
+  if (observation.filesTouched.length > 0) steps.add("read_source_file");
+  if (observation.commandsRun.length > 0 || observation.tests.length > 0) steps.add("run_tests");
+  if (observation.filesTouched.length > 0) steps.add("inspect_change_summary");
+  steps.add("privacy_check");
+  if (confidence < 0.8 || privacyStatus !== "pass") steps.add("review_evidence");
+  return Array.from(steps);
+}
+
+function inferLessonType(observation: TaskObservation, lesson: string): LessonCandidateType {
+  const corpus = normalizeMemoryText(`${observation.taskTitle} ${observation.taskSummary ?? ""} ${lesson} ${observation.filesTouched.map((file) => file.path).join(" ")}`);
+  if (/\b(permission|403|forbidden|role|auth|least privilege)\b/i.test(corpus)) return "permission";
+  if (/\b(secret|privacy|token|credential|security)\b/i.test(corpus)) return "security";
+  if (/\b(test|vitest|jest|playwright|coverage)\b/i.test(corpus)) return "testing";
+  if (/\b(deploy|production|release|docker|ci|rollback)\b/i.test(corpus)) return "deployment";
+  if (/\b(schema|database|migration|sql|prisma)\b/i.test(corpus)) return "data_model";
+  if (/\b(cli|command|flag|terminal)\b/i.test(corpus)) return "cli";
+  if (/\b(architecture|boundary|module|package)\b/i.test(corpus)) return "architecture";
+  if (/\b(bug|fix|error|failed|failure)\b/i.test(corpus)) return "bug_fix";
+  if (/\b(workflow|process|route|approval)\b/i.test(corpus)) return "workflow";
+  return "other";
+}
+
+function privacyStatusForCandidate(input: LessonProposalInput, evidence: Evidence[]): TaskObservationPrivacyStatus {
+  return privacyStatusForRawInput({
+    title: input.title,
+    lesson: input.agentProposedLesson,
+    appliesTo: input.appliesTo,
+    suggestedVerification: input.suggestedVerification,
+    evidence
+  });
+}
+
+function privacyStatusForRawInput(input: unknown): TaskObservationPrivacyStatus {
+  const serialized = JSON.stringify(input ?? {});
+  const egress = runEgressSecretScan(serialized);
+  if (egress.blocked || hasSensitivePath(serialized)) {
+    return "blocked";
+  }
+  return redactText(serialized) === serialized ? "pass" : "warning";
+}
+
+function strongestPrivacyStatus(left: TaskObservationPrivacyStatus, right: TaskObservationPrivacyStatus): TaskObservationPrivacyStatus {
+  if (left === "blocked" || right === "blocked") return "blocked";
+  if (left === "warning" || right === "warning") return "warning";
+  return "pass";
+}
+
+function isOnlyAgentSummary(evidence: Evidence[]): boolean {
+  const substantive = evidence.filter((entry) => entry.type !== "privacy_check");
+  return substantive.length === 1 && substantive[0]?.type === "agent_summary";
+}
+
+function assertCandidateCanBeApproved(candidate: LessonCandidate): void {
+  if (candidate.approvalStatus === "rejected") {
+    throw new Error("Rejected lesson candidates cannot be approved.");
+  }
+  if (candidate.privacyStatus === "blocked") {
+    throw new Error("Privacy-blocked lesson candidates cannot be approved.");
+  }
+  if (candidate.evidence.length === 0) {
+    throw new Error("Lesson candidates without evidence cannot be approved.");
+  }
+  if (candidate.confidence < 0.2) {
+    throw new Error("Low-confidence lesson candidates require review and cannot be approved yet.");
+  }
+}
+
+function lessonCandidateToMemoryContent(candidate: LessonCandidate): string {
+  return [
+    `Lesson: ${candidate.lesson}`,
+    `Task: ${candidate.summary}`,
+    `Confidence: ${candidate.confidence}`,
+    `Privacy: ${candidate.privacyStatus}`,
+    `Verification required: ${candidate.verifyRequired ? "yes" : "no"}`,
+    `Last verified at: ${candidate.lastVerifiedAt ?? "not verified"}`,
+    candidate.sourceRefs.length > 0 ? `Source refs: ${candidate.sourceRefs.map((ref) => ref.ref).join(", ")}` : undefined,
+    "Evidence:",
+    ...candidate.evidence.map((entry) => `- ${entry.type}: ${entry.summary} (${entry.ref})`),
+    "Suggested verification:",
+    ...candidate.suggestedVerification.map((step) => `- ${step}`)
+  ].filter(Boolean).join("\n");
+}
+
+function sanitizeText(value: string, maxLength: number): string {
+  return redactText(String(value ?? "").replace(/\s+/g, " ").trim()).slice(0, maxLength);
+}
+
+function sanitizePath(value: string): string {
+  const text = sanitizeText(value, 240).replace(/\\/g, "/");
+  return hasSensitivePath(text) ? "[REDACTED_SENSITIVE_PATH]" : text;
+}
+
+function sanitizeStringList(values: string[], limit: number, maxLength: number): string[] {
+  return Array.from(new Set(values.map((value) => sanitizeText(value, maxLength)).filter(Boolean))).slice(0, limit);
+}
+
+function sanitizeIdentifier(value?: string): string | undefined {
+  const sanitized = value ? sanitizeText(value, 120) : undefined;
+  return sanitized && /^[A-Za-z0-9_.:-]+$/.test(sanitized) ? sanitized : undefined;
+}
+
+function hasSensitivePath(value: string): boolean {
+  return /(^|[/\\])\.env($|[./\\])|private[_-]?key|secret|credential|id_rsa|id_ed25519|wp-config\.php|\.npmrc|\.yarnrc/i.test(value);
+}
+
+function safeJsonValue<T>(value: string, fallback: T): T {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function isTaskOutcome(value: string): value is TaskOutcome {
+  return value === "pass" || value === "fail" || value === "partial" || value === "unknown";
+}
+
+function isPrivacyStatus(value: string): value is TaskObservationPrivacyStatus {
+  return value === "pass" || value === "warning" || value === "blocked";
+}
+
+function isApprovalStatus(value: string): value is LessonApprovalStatus {
+  return value === "pending" || value === "approved" || value === "rejected" || value === "needs_review";
+}
+
+function isLessonType(value: string): value is LessonCandidateType {
+  return [
+    "bug_fix",
+    "architecture",
+    "security",
+    "testing",
+    "deployment",
+    "workflow",
+    "permission",
+    "data_model",
+    "cli",
+    "other"
+  ].includes(value);
+}
+
+function isFileChangeType(value: string): value is FileTouchSummary["changeType"] {
+  return value === "created" || value === "modified" || value === "deleted" || value === "renamed";
+}
+
+function isRunStatus(value: string): value is CommandRunSummary["status"] {
+  return value === "pass" || value === "fail" || value === "unknown";
 }
 
 function appendProjectMemoryEvent(db: DatabaseSync, memoryId: string | undefined, eventType: string, payload: Record<string, unknown>): void {

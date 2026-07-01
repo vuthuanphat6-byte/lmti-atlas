@@ -84,9 +84,14 @@ standardized so agents can see what must be checked before acting.
 
 ### Lesson Capture
 
-After a task, `lmti task done` and `lmti memory lesson` capture reusable
-project knowledge intentionally. Lessons should describe durable behavior, not
-paste raw private chat.
+After a task, `lmti task done --lesson ...` and `lmti memory lesson propose`
+create lesson candidates, not approved memory. A candidate must pass privacy
+scanning, evidence checks, confidence scoring, and human approval before it is
+stored as long-term project memory.
+
+Current scope is Level 2 lesson proposal only. LMTI does not train a model, does
+not store every task transcript or raw diff, and does not auto-approve risky
+lessons. Pending candidates are kept out of context retrieval.
 
 ### Adapter Layer
 
@@ -159,10 +164,18 @@ Run the policy-safe preflight path:
 node packages/cli/dist/index.js preflight "fix partner dashboard permission" --role developer --model-target external_model
 ```
 
-Capture a lesson after a task:
+Propose a lesson after a task:
 
 ```bash
 node packages/cli/dist/index.js task done --title "Partner route fix" --summary "Confirmed partner routing behavior." --lesson "Partner users must route through /partner; do not widen permissions to make /dashboard pass."
+```
+
+Review and approve only if the evidence is enough:
+
+```bash
+node packages/cli/dist/index.js memory lesson candidates
+node packages/cli/dist/index.js memory lesson show <candidate-id>
+node packages/cli/dist/index.js memory lesson approve <candidate-id>
 ```
 
 Useful npm aliases:
@@ -190,7 +203,7 @@ Recommended local flow:
 3. Attach LMTI guidance to Codex.
 4. Run preflight for the current task.
 5. Let Codex inspect source, tests, and command output before editing.
-6. Capture durable lessons after the task.
+6. Propose durable lessons after the task, then review and approve them.
 7. Run doctor/preflight before future high-risk tasks.
 
 Commands:
@@ -286,7 +299,9 @@ permissions, database assumptions, and security-sensitive behavior.
 ### Lesson
 
 A reusable rule learned from a completed task. A good lesson is short,
-source-grounded, and useful for preventing a future mistake.
+source-grounded, and useful for preventing a future mistake. In the Level 2
+pipeline, new lessons start as candidates and become long-term memory only
+after approval.
 
 ### Adapter
 
@@ -428,9 +443,10 @@ packages/cli         Command adapter for local workflows.
 - `lmti context "<task>"` builds a task Context Pack.
 - `lmti preflight "<task>"` builds a policy-safe MVP context package.
 - `lmti attach codex` updates `AGENTS.md` with LMTI guidance.
-- `lmti memory ...` manages project memory, short memory, retrieval, lessons,
-  privacy checks, consolidation, review, decay, and reinforcement.
-- `lmti task done` records task completion events and optional lessons.
+- `lmti memory ...` manages project memory, short memory, retrieval, lesson
+  candidates, privacy checks, consolidation, review, decay, and reinforcement.
+- `lmti task done` records task completion events and can propose lesson
+  candidates for review.
 - `lmti doctor` diagnoses storage, AMF, ignore rules, migration, and security.
 - `lmti framework ...` detects frameworks, commands, risk zones, and verify plans.
 - `lmti actions ...` records and replays local Codex/AI-agent action sessions.

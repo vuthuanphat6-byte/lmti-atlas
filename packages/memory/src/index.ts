@@ -43,6 +43,7 @@ export type { MemoryRecord, MemorySearchResult };
 export { encodeMemory } from "./encode";
 export {
   addProjectMemory,
+  approveLessonCandidate,
   checkProjectMemoryPrivacy,
   classifyLibraryMemory,
   cleanupShortMemoryNotes,
@@ -51,20 +52,28 @@ export {
   evaluateShortMemoryForPromotion,
   expireShortMemoryNotes,
   getProjectMemoryStats,
+  getLessonCandidate,
+  getLessonCandidateReviewSummary,
   initProjectMemoryStorage,
   LIBRARY_ZONES,
+  listLessonCandidates,
   migrateJsonMemoryToProjectMemory,
   PROJECT_MEMORY_DB_FILE,
+  proposeLessonCandidate,
   promoteShortMemoryToLongMemory,
+  rejectLessonCandidate,
   retrieveMemoryContextForTask,
   retrieveMemoryForTask,
   retrieveShortMemoryForTask,
-  saveLessonAfterTask,
   searchProjectMemory,
   suggestZonesForTask,
   updateProjectMemory,
   type AddProjectMemoryInput,
   type CreateShortMemoryNoteInput,
+  type LessonCandidateListOptions,
+  type LessonCandidateReviewSummary,
+  type LessonProposalInput,
+  type LessonProposalResult,
   type LibraryClassification,
   type LibraryPrivacyLevel,
   type LibraryZone,
@@ -79,7 +88,6 @@ export {
   type RetrieveMemoryForTaskOptions,
   type RetrieveShortMemoryOptions,
   type RetrieveShortMemoryResult,
-  type SaveLessonAfterTaskInput,
   type ShortMemoryCleanupResult,
   type ShortMemoryExpirationResult,
   type ShortMemoryNote,
@@ -860,7 +868,7 @@ export async function recordTaskDone(input: TaskDoneInput, options: MemoryRuntim
   return {
     event,
     lessonMemory,
-    suggestion: lessonMemory ? undefined : createRememberSuggestion(input.title, input.summary, tags, input.sensitivity ?? "internal", input.promptPolicy ?? "summarize_only")
+    suggestion: lessonMemory ? undefined : createRememberSuggestion(input.title, input.summary, tags)
   };
 }
 
@@ -1694,11 +1702,11 @@ function intentTags(taskIntent?: InferredIntent): string[] {
   return [taskIntent.primaryIntent, ...taskIntent.secondaryIntents].filter((intent) => intent !== "unknown");
 }
 
-function createRememberSuggestion(title: string, summary: string, tags: string[], sensitivity: MemorySensitivity, promptPolicy: PromptPolicy): string {
+function createRememberSuggestion(title: string, summary: string, tags: string[]): string {
   const safeTitle = title.replace(/"/g, "'");
   const safeSummary = summary.replace(/"/g, "'");
   const tagArg = tags.length > 0 ? tags.join(",") : "lesson";
-  return `Should this be remembered as a project lesson? Use lmti remember --kind lesson --title "${safeTitle}" --content "${safeSummary}" --tags ${tagArg} --sensitivity ${sensitivity} --prompt-policy ${promptPolicy}`;
+  return `Should this be proposed as a project lesson? Use lmti memory lesson propose --task "${safeTitle}" --summary "${safeSummary}" --lesson "<lesson>" --applies-to ${tagArg}`;
 }
 
 async function ensureJsonArray(filePath: string): Promise<void> {

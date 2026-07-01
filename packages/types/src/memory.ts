@@ -187,3 +187,113 @@ export interface ContextMemory {
   score: number;
   activation?: number;
 }
+
+export type TaskOutcome = "pass" | "fail" | "partial" | "unknown";
+
+export type TaskObservationPrivacyStatus = "pass" | "warning" | "blocked";
+
+export type LessonApprovalStatus = "pending" | "approved" | "rejected" | "needs_review";
+
+export type LessonCandidateType =
+  | "bug_fix"
+  | "architecture"
+  | "security"
+  | "testing"
+  | "deployment"
+  | "workflow"
+  | "permission"
+  | "data_model"
+  | "cli"
+  | "other";
+
+export interface SourceRef {
+  ref: string;
+  kind?: "file" | "test" | "command" | "task" | "user" | "memory" | "other";
+}
+
+export interface FileTouchSummary {
+  path: string;
+  changeType: "created" | "modified" | "deleted" | "renamed";
+  changeSummary?: string;
+  riskLevel?: "low" | "medium" | "high";
+}
+
+export interface CommandRunSummary {
+  command: string;
+  exitCode: number | null;
+  status: "pass" | "fail" | "unknown";
+  outputSummary?: string;
+  outputRedacted: true;
+}
+
+export interface TestRunSummary {
+  name: string;
+  status: "pass" | "fail" | "unknown";
+  command?: string;
+  summary?: string;
+}
+
+export interface ErrorSummary {
+  message: string;
+  source?: string;
+  severity?: "low" | "medium" | "high";
+}
+
+export interface DecisionSummary {
+  decision: string;
+  reason?: string;
+  source?: string;
+}
+
+export interface TaskObservation {
+  taskId: string;
+  taskTitle: string;
+  taskSummary?: string;
+  agent?: string;
+  filesTouched: FileTouchSummary[];
+  commandsRun: CommandRunSummary[];
+  tests: TestRunSummary[];
+  errors: ErrorSummary[];
+  decisions: DecisionSummary[];
+  outcome: TaskOutcome;
+  privacyScanStatus: TaskObservationPrivacyStatus;
+  sourceRefs: SourceRef[];
+  createdAt: string;
+}
+
+export type EvidenceType =
+  | "file_changed"
+  | "test_passed"
+  | "test_failed"
+  | "command_exit_code"
+  | "error_observed"
+  | "user_instruction"
+  | "agent_summary"
+  | "privacy_check";
+
+export interface Evidence {
+  type: EvidenceType;
+  ref: string;
+  summary: string;
+  confidence: number;
+}
+
+export interface LessonCandidate {
+  id: string;
+  taskId: string;
+  lessonType: LessonCandidateType;
+  title: string;
+  summary: string;
+  lesson: string;
+  appliesTo: string[];
+  sourceRefs: SourceRef[];
+  evidence: Evidence[];
+  confidence: number;
+  privacyStatus: TaskObservationPrivacyStatus;
+  approvalStatus: LessonApprovalStatus;
+  verifyRequired: boolean;
+  suggestedVerification: string[];
+  lastVerifiedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}

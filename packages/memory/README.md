@@ -55,7 +55,7 @@ It adds:
 * Write-time privacy gate that redacts secret-like material before storage.
 * Retrieval-time privacy gate that blocks `secret` and `do_not_prompt` memory
   before AI prompt assembly.
-* Post-task lessons through `saveLessonAfterTask`.
+* Lesson candidates through the explicit proposal and approval flow.
 * Short Memory notes for temporary task context with TTL, FTS5 retrieval,
   expiration, cleanup and explicit promotion into Long Memory.
 
@@ -66,7 +66,9 @@ lmti memory init
 lmti memory add --title "Partner dashboard 403" --content "Partner user must route to /partner."
 lmti memory search "dashboard 403 partner"
 lmti memory retrieve "fix partner dashboard permission"
-lmti memory lesson --task "Partner route fix" --lesson "Partner user must route through /partner."
+lmti memory lesson propose --task "Partner route fix" --lesson "Partner user must route through /partner."
+lmti memory lesson candidates
+lmti memory lesson approve <candidateId>
 lmti memory stats
 lmti memory privacy-check
 lmti memory short:add --title "Current checkpoint" --content "Inspect retrieval next." --priority medium

@@ -21,6 +21,7 @@ import {
 import { contextPackToBeliefs, contextPackToSensoryInputs, estimateComputeCost, runWorldModelCycle } from "@atlas/world-model";
 import {
   addProjectMemory,
+  approveLessonCandidate,
   checkMemoryPrivacy,
   checkProjectMemoryPrivacy,
   classifyLibraryMemory,
@@ -35,10 +36,13 @@ import {
   evaluateShortMemoryForPromotion,
   explainMemory,
   expireShortMemoryNotes,
+  getLessonCandidate,
+  getLessonCandidateReviewSummary,
   getMemoryAssociations,
   getProjectMemoryStats,
   initProjectMemoryStorage,
   initAtlasStorage,
+  listLessonCandidates,
   listMemory,
   EXPERIMENTS_DIR,
   type InitResult,
@@ -49,14 +53,15 @@ import {
   migrateJsonMemoryToProjectMemory,
   promoteMemory,
   promoteShortMemoryToLongMemory,
+  proposeLessonCandidate,
   recordTaskDone,
+  rejectLessonCandidate,
   retrieveMemoryContextForTask,
   reinforceMemory,
   retrieveMemoryForTask,
   retrieveShortMemoryForTask,
   reviewMemory,
   readAmfDocument,
-  saveLessonAfterTask,
   fetchAllowedMemoryContent,
   retrieveMemoryMetadata,
   searchMemory,
@@ -118,11 +123,17 @@ import type {
   AdapterSandboxResult,
   AmfDocument,
   BlockedMemory,
+  CommandRunSummary,
   ContextCandidate,
   ContextPackage,
   ContextRequest,
+  DecisionSummary,
+  ErrorSummary,
   FileEntry,
+  FileTouchSummary,
   InferredIntent,
+  LessonApprovalStatus,
+  LessonCandidateType,
   MemoryKind,
   MemoryRecord,
   MemoryScope,
@@ -133,7 +144,11 @@ import type {
   ObserverFrame,
   PolicySafeMemoryResult,
   PreflightResult,
-  PromptPolicy
+  PromptPolicy,
+  SourceRef,
+  TestRunSummary,
+  TaskObservationPrivacyStatus,
+  TaskOutcome
 } from "@atlas/types";
 
 const DEFAULT_PREFLIGHT_ADAPTER_MANIFEST: AdapterManifest = {
@@ -473,6 +488,24 @@ export async function doctorSecurityCommand(cwd: string): Promise<SecurityDoctor
     }
   } catch {
     checks.push({ id: "memory-privacy", status: "warn", message: "Memory privacy check could not run." });
+  }
+
+  try {
+    const lessonReview = await getLessonCandidateReviewSummary({ cwd });
+    const needsAttention = lessonReview.pending + lessonReview.needsReview + lessonReview.privacyWarnings + lessonReview.missingEvidence;
+    checks.push({
+      id: "lesson-candidates",
+      status: needsAttention > 0 ? "warn" : "pass",
+      message:
+        needsAttention > 0
+          ? `${lessonReview.pending} pending, ${lessonReview.needsReview} needs-review, ${lessonReview.privacyWarnings} privacy warning lesson candidate(s) require approval workflow.`
+          : "No lesson candidates require approval review."
+    });
+    if (needsAttention > 0) {
+      recommendations.add("Run `lmti memory lesson candidates` and approve only evidence-backed, privacy-safe lessons.");
+    }
+  } catch {
+    checks.push({ id: "lesson-candidates", status: "warn", message: "Lesson candidate review check could not run." });
   }
 
   const failed = checks.some((check) => check.status === "fail");
@@ -1555,26 +1588,110 @@ async function runProjectMemoryRetrieve(args: string[]): Promise<void> {
 }
 
 async function runProjectMemoryLesson(args: string[]): Promise<void> {
-  const { flags } = parseArgs(args);
-  const task = stringFlag(flags, "task");
-  const lesson = stringFlag(flags, "lesson");
-  if (!task || !lesson) {
-    throw new Error('Usage: lmti memory lesson --task "..." --lesson "..." [--what-changed "..."] [--fix-applied "..."]');
+  const [subcommand, ...rest] = args;
+  switch (subcommand) {
+    case "propose":
+      await runProjectMemoryLessonPropose(rest);
+      return;
+    case "candidates":
+    case "list":
+      await runProjectMemoryLessonCandidates(rest);
+      return;
+    case "show":
+      await runProjectMemoryLessonShow(rest);
+      return;
+    case "approve":
+      await runProjectMemoryLessonApprove(rest);
+      return;
+    case "reject":
+      await runProjectMemoryLessonReject(rest);
+      return;
+    default:
+      throw new Error("Usage: lmti memory lesson <propose|candidates|show|approve|reject>");
+  }
+}
+
+async function runProjectMemoryLessonPropose(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const taskTitle = stringFlag(flags, "task") ?? stringFlag(flags, "title") ?? positional[0];
+  if (!taskTitle) {
+    throw new Error('Usage: lmti memory lesson propose --task "..." [--lesson "..."] [--files-touched src/a.ts] [--commands "npm test:0"] [--tests "npm test:pass"]');
   }
 
-  const result = await saveLessonAfterTask(
+  const result = await proposeLessonCandidate(
     {
-      task,
-      lesson,
-      whatChanged: stringFlag(flags, "what-changed"),
-      bugFound: stringFlag(flags, "bug-found"),
-      fixApplied: stringFlag(flags, "fix-applied"),
-      filesTouched: parseCsv(stringFlag(flags, "files-touched")),
-      risk: stringFlag(flags, "risk")
+      observation: {
+        taskId: stringFlag(flags, "task-id"),
+        taskTitle,
+        taskSummary: stringFlag(flags, "summary") ?? stringFlag(flags, "task-summary"),
+        agent: stringFlag(flags, "agent") ?? "codex",
+        filesTouched: parseFileTouchSummaries(stringFlag(flags, "files-touched") ?? stringFlag(flags, "files")),
+        commandsRun: parseCommandRunSummaries(stringFlag(flags, "commands") ?? stringFlag(flags, "commands-run")),
+        tests: parseTestRunSummaries(stringFlag(flags, "tests")),
+        errors: parseErrorSummaries(stringFlag(flags, "errors")),
+        decisions: parseDecisionSummaries(stringFlag(flags, "decisions")),
+        outcome: parseTaskOutcome(stringFlag(flags, "outcome") ?? inferOutcomeFlag(flags)),
+        sourceRefs: parseSourceRefs(stringFlag(flags, "source-refs"))
+      },
+      agentProposedLesson: stringFlag(flags, "agent-lesson") ?? stringFlag(flags, "lesson"),
+      lessonType: parseLessonType(stringFlag(flags, "type") ?? stringFlag(flags, "lesson-type")),
+      title: stringFlag(flags, "candidate-title") ?? stringFlag(flags, "title") ?? taskTitle,
+      appliesTo: parseCsv(stringFlag(flags, "applies-to")),
+      suggestedVerification: parseCsv(stringFlag(flags, "suggested-verification"))
     },
-    { cwd: process.cwd() }
+    { cwd: process.cwd(), now: parseNowFlag(flags) }
   );
-  printSafeJson(result, "memory lesson");
+  printSafeJson(result, "memory lesson propose");
+}
+
+async function runProjectMemoryLessonCandidates(args: string[]): Promise<void> {
+  const { flags } = parseArgs(args);
+  const candidates = await listLessonCandidates({
+    cwd: process.cwd(),
+    approvalStatus: parseLessonApprovalStatus(stringFlag(flags, "approval-status") ?? stringFlag(flags, "status")),
+    privacyStatus: parseLessonPrivacyStatus(stringFlag(flags, "privacy-status")),
+    limit: parseNumberFlag(flags, "limit", 20)
+  });
+  printSafeJson(candidates, "memory lesson candidates");
+}
+
+async function runProjectMemoryLessonShow(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const id = stringFlag(flags, "id") ?? positional[0];
+  if (!id) {
+    throw new Error("Usage: lmti memory lesson show <candidate-id>");
+  }
+  const candidate = await getLessonCandidate(id, { cwd: process.cwd() });
+  if (!candidate) {
+    throw new Error(`Lesson candidate not found: ${id}`);
+  }
+  printSafeJson(candidate, "memory lesson show");
+}
+
+async function runProjectMemoryLessonApprove(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const id = stringFlag(flags, "id") ?? positional[0];
+  if (!id) {
+    throw new Error("Usage: lmti memory lesson approve <candidate-id>");
+  }
+  const result = await approveLessonCandidate(id, {
+    cwd: process.cwd(),
+    now: parseNowFlag(flags)
+  });
+  printSafeJson(result, "memory lesson approve");
+}
+
+async function runProjectMemoryLessonReject(args: string[]): Promise<void> {
+  const { positional, flags } = parseArgs(args);
+  const id = stringFlag(flags, "id") ?? positional[0];
+  if (!id) {
+    throw new Error("Usage: lmti memory lesson reject <candidate-id>");
+  }
+  const candidate = await rejectLessonCandidate(id, {
+    cwd: process.cwd(),
+    now: parseNowFlag(flags)
+  });
+  printSafeJson(candidate, "memory lesson reject");
 }
 
 async function runProjectMemoryStats(): Promise<void> {
@@ -2433,16 +2550,21 @@ export async function rememberCommand(cwd: string, args: string[]): Promise<Memo
   const title = stringFlag(flags, "title");
   const content = stringFlag(flags, "content");
   if (!title || !content) {
-    throw new Error('Usage: lmti remember --kind lesson --title "..." --content "..." --tags a,b --sensitivity internal --prompt-policy summarize_only');
+    throw new Error('Usage: lmti remember --kind rule --title "..." --content "..." --tags a,b --sensitivity internal --prompt-policy summarize_only');
   }
 
   const inferred = inferIntent(`${title} ${content}`);
   const tags = Array.from(new Set([...parseCsv(stringFlag(flags, "tags")), inferred.primaryIntent, ...inferred.secondaryIntents].filter((tag) => tag && tag !== "unknown")));
+  const kind = parseKind(stringFlag(flags, "kind") ?? "rule");
+
+  if (kind === "lesson") {
+    throw new Error("Use `lmti memory lesson propose` for lessons so they pass privacy/evidence/confidence review before approval.");
+  }
 
   return createMemory(
     {
       scope: "long_term",
-      kind: parseKind(stringFlag(flags, "kind") ?? "lesson"),
+      kind,
       title,
       content,
       projectId: stringFlag(flags, "project-id") ?? (await detectProjectId()),
@@ -2467,6 +2589,9 @@ async function runTask(args: string[]): Promise<void> {
   if (result.lessonMemory) {
     printSafeJson(safeMemoryForCli(result.lessonMemory), "task lesson");
   }
+  if (result.lessonCandidate) {
+    printSafeJson(result.lessonCandidate, "task lesson candidate");
+  }
   if (result.suggestion) {
     console.log(result.suggestion);
   }
@@ -2481,11 +2606,12 @@ export async function taskDoneCommand(cwd: string, args: string[]) {
   }
 
   const taskIntent = inferIntent(`${title} ${summary} ${stringFlag(flags, "lesson") ?? ""}`);
-  return recordTaskDone(
+  const proposedLesson = stringFlag(flags, "lesson") ?? stringFlag(flags, "agent-lesson");
+  const result = await recordTaskDone(
     {
       title,
       summary,
-      lesson: stringFlag(flags, "lesson"),
+      lesson: undefined,
       tags: parseCsv(stringFlag(flags, "tags")),
       sensitivity: parseSensitivity(stringFlag(flags, "sensitivity") ?? "internal"),
       promptPolicy: parsePromptPolicy(stringFlag(flags, "prompt-policy") ?? "summarize_only"),
@@ -2494,6 +2620,39 @@ export async function taskDoneCommand(cwd: string, args: string[]) {
     },
     { cwd }
   );
+
+  if (!proposedLesson && !flags["propose-lesson"]) {
+    return { ...result, lessonCandidate: undefined };
+  }
+
+  const proposal = await proposeLessonCandidate(
+    {
+      observation: {
+        taskId: stringFlag(flags, "task-id"),
+        taskTitle: title,
+        taskSummary: summary,
+        agent: stringFlag(flags, "agent") ?? "codex",
+        filesTouched: parseFileTouchSummaries(stringFlag(flags, "files-touched") ?? stringFlag(flags, "files")),
+        commandsRun: parseCommandRunSummaries(stringFlag(flags, "commands") ?? stringFlag(flags, "commands-run")),
+        tests: parseTestRunSummaries(stringFlag(flags, "tests")),
+        errors: parseErrorSummaries(stringFlag(flags, "errors")),
+        decisions: parseDecisionSummaries(stringFlag(flags, "decisions")),
+        outcome: parseTaskOutcome(stringFlag(flags, "outcome") ?? inferOutcomeFlag(flags)),
+        sourceRefs: parseSourceRefs(stringFlag(flags, "source-refs"))
+      },
+      agentProposedLesson: proposedLesson,
+      lessonType: parseLessonType(stringFlag(flags, "type") ?? stringFlag(flags, "lesson-type")),
+      appliesTo: parseCsv(stringFlag(flags, "applies-to")),
+      suggestedVerification: parseCsv(stringFlag(flags, "suggested-verification"))
+    },
+    { cwd }
+  );
+
+  return {
+    ...result,
+    suggestion: undefined,
+    lessonCandidate: proposal.candidate
+  };
 }
 
 async function runPrivacy(args: string[]): Promise<void> {
@@ -2583,8 +2742,8 @@ Before making changes, Codex should:
 3. Prefer compiled understanding over repeatedly scanning the entire repository.
 4. Respect .lmti privacy rules.
 5. Never expose secret memory or confidential project knowledge in raw form.
-6. After completing a task, summarize what changed and suggest what should be stored as long-term memory.
-7. If a task reveals a reusable rule, bug, route, deploy note, permission rule or architecture constraint, prefer \`lmti task done --lesson "..."\` or \`lmti memory consolidate\` over storing raw chat.
+6. After completing a task, summarize what changed and propose safe lesson candidates instead of storing raw chat.
+7. If a task reveals a reusable rule, bug, route, deploy note, permission rule or architecture constraint, prefer \`lmti task done --lesson "..."\` or \`lmti memory lesson propose\`; approve only after privacy/evidence review.
 8. Treat memory as prior belief, not reality. Source code, tests, tool output and explicit user instruction are observations.
 9. Use framework detection before planning build/test/risk steps on unfamiliar projects.
 10. Do not bypass LMTI privacy gates, do not widen permissions to make a task pass, and never print secrets.
@@ -2595,10 +2754,8 @@ lmti context "<task>"
 lmti mind context "<task>"
 lmti framework detect
 lmti preflight "<task>" --role developer --model-target external_model
-lmti memory explain "<task>"
-lmti memory review
-lmti world check "<task>"
-lmti benchmark preflight "<task>" --runs 5
+lmti memory lesson candidates
+lmti doctor --security
 ${LMTI_SECTION_END}`;
 
 function upsertLmtiAgentsSection(existing: string): string {
@@ -2657,12 +2814,12 @@ function assertPathInsideCwd(cwd: string, targetPath: string, label: string): vo
 }
 
 function printSafeJson(value: unknown, label: string): void {
-  const serialized = JSON.stringify(value, null, 2);
+  const serialized = JSON.stringify(redactJsonValue(value), null, 2);
   const scan = runEgressSecretScan(serialized);
   if (scan.blocked) {
     console.warn(`[LMTI] ${label} output matched secret patterns and was redacted before printing.`);
   }
-  console.log(redactText(serialized));
+  console.log(serialized);
 }
 
 function printSafeText(value: string): void {
@@ -2671,6 +2828,19 @@ function printSafeText(value: string): void {
     console.warn("[LMTI] text output matched secret patterns and was redacted before printing.");
   }
   console.log(redactText(value));
+}
+
+function redactJsonValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return redactText(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(redactJsonValue);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [redactText(key), redactJsonValue(entry)]));
+  }
+  return value;
 }
 
 function printHelp(): void {
@@ -2700,7 +2870,11 @@ Usage:
   lmti memory short:cleanup [--dry-run]
   lmti memory short:evaluate <noteId>
   lmti memory short:promote <noteId> [--reason "..."]
-  lmti memory lesson --task "..." --lesson "..."
+  lmti memory lesson propose --task "..." --lesson "..."
+  lmti memory lesson candidates [--approval-status pending]
+  lmti memory lesson show <candidate-id>
+  lmti memory lesson approve <candidate-id>
+  lmti memory lesson reject <candidate-id>
   lmti memory stats
   lmti memory privacy-check
   lmti memory consolidate
@@ -2738,7 +2912,7 @@ Usage:
   lmti world cost "<task>"
   lmti world align "<task>"
   lmti world observe "<input>"
-  lmti remember --kind lesson --title "..." --content "..." --tags a,b --prompt-policy summarize_only
+  lmti remember --kind rule --title "..." --content "..." --tags a,b --prompt-policy summarize_only
   lmti task done --title "..." --summary "..." [--lesson "..."]
   lmti privacy audit [--verify|--retain 1000]
   lmti privacy check
@@ -2760,8 +2934,8 @@ Commands:
   actions   Track, audit and replay Codex/AI Agent actions.
   cognition Run the deterministic Cognitive Orchestrator.
   world     Run Reality Boundary and resource-bounded active inference checks.
-  remember  Store a deliberate project lesson, rule or decision.
-  task      Record completed task events and optional lessons.
+  remember  Store a deliberate project rule or decision.
+  task      Record completed task events and optional lesson candidates.
   privacy   Inspect Cognitive Privacy audit and memory safety.
   benchmark Measure local LMTI hot-path latency.
 `);
@@ -2916,6 +3090,154 @@ function parsePrivacyMode(value?: string): "safe" | "internal" {
     return "internal";
   }
   throw new Error(`Invalid privacy mode: ${value}`);
+}
+
+function parseTaskOutcome(value?: string): TaskOutcome {
+  if (!value) {
+    return "unknown";
+  }
+  if (value === "pass" || value === "fail" || value === "partial" || value === "unknown") {
+    return value;
+  }
+  throw new Error(`Invalid task outcome: ${value}`);
+}
+
+function inferOutcomeFlag(flags: Record<string, FlagValue>): string | undefined {
+  if (flags.pass) {
+    return "pass";
+  }
+  if (flags.fail) {
+    return "fail";
+  }
+  if (flags.partial) {
+    return "partial";
+  }
+  return undefined;
+}
+
+function parseLessonType(value?: string): LessonCandidateType | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const allowed = new Set<LessonCandidateType>([
+    "bug_fix",
+    "architecture",
+    "security",
+    "testing",
+    "deployment",
+    "workflow",
+    "permission",
+    "data_model",
+    "cli",
+    "other"
+  ]);
+  if (allowed.has(value as LessonCandidateType)) {
+    return value as LessonCandidateType;
+  }
+  throw new Error(`Invalid lesson type: ${value}`);
+}
+
+function parseLessonApprovalStatus(value?: string): LessonApprovalStatus | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (value === "pending" || value === "approved" || value === "rejected" || value === "needs_review") {
+    return value;
+  }
+  throw new Error(`Invalid lesson approval status: ${value}`);
+}
+
+function parseLessonPrivacyStatus(value?: string): TaskObservationPrivacyStatus | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (value === "pass" || value === "warning" || value === "blocked") {
+    return value;
+  }
+  throw new Error(`Invalid lesson privacy status: ${value}`);
+}
+
+function parseFileTouchSummaries(value?: string): FileTouchSummary[] {
+  return parseCsv(value).map((entry) => {
+    const parsed = parseTrailingToken(entry, ["created", "modified", "deleted", "renamed"]);
+    return {
+      path: parsed.head,
+      changeType: (parsed.tail ?? "modified") as FileTouchSummary["changeType"]
+    };
+  });
+}
+
+function parseCommandRunSummaries(value?: string): CommandRunSummary[] {
+  return parseCsv(value).map((entry) => {
+    const parsed = parseTrailingNumber(entry);
+    const exitCode = parsed.tail;
+    return {
+      command: parsed.head,
+      exitCode,
+      status: exitCode === null ? "unknown" : exitCode === 0 ? "pass" : "fail",
+      outputRedacted: true
+    };
+  });
+}
+
+function parseTestRunSummaries(value?: string): TestRunSummary[] {
+  return parseCsv(value).map((entry) => {
+    const parsed = parseTrailingToken(entry, ["pass", "fail", "unknown"]);
+    const status = (parsed.tail ?? "unknown") as TestRunSummary["status"];
+    return {
+      name: parsed.head,
+      status,
+      command: parsed.head
+    };
+  });
+}
+
+function parseErrorSummaries(value?: string): ErrorSummary[] {
+  return parseCsv(value).map((entry) => ({
+    message: entry,
+    severity: "medium"
+  }));
+}
+
+function parseDecisionSummaries(value?: string): DecisionSummary[] {
+  return parseCsv(value).map((entry) => ({
+    decision: entry,
+    source: "user"
+  }));
+}
+
+function parseSourceRefs(value?: string): SourceRef[] {
+  return parseCsv(value).map((entry) => {
+    const parsed = parseTrailingToken(entry, ["file", "test", "command", "task", "user", "memory", "other"]);
+    return {
+      ref: parsed.head,
+      kind: (parsed.tail ?? "other") as SourceRef["kind"]
+    };
+  });
+}
+
+function parseTrailingToken<T extends string>(value: string, allowed: readonly T[]): { head: string; tail?: T } {
+  const index = value.lastIndexOf(":");
+  if (index <= 0) {
+    return { head: value };
+  }
+  const tail = value.slice(index + 1).trim();
+  if (!allowed.includes(tail as T)) {
+    return { head: value };
+  }
+  return { head: value.slice(0, index).trim(), tail: tail as T };
+}
+
+function parseTrailingNumber(value: string): { head: string; tail: number | null } {
+  const index = value.lastIndexOf(":");
+  if (index <= 0) {
+    return { head: value, tail: null };
+  }
+  const tail = Number(value.slice(index + 1).trim());
+  if (!Number.isFinite(tail)) {
+    return { head: value, tail: null };
+  }
+  return { head: value.slice(0, index).trim(), tail };
 }
 
 function parseCodexActionType(value: string): CodexActionType {

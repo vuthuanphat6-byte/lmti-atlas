@@ -10,8 +10,17 @@ export type {
   ContextMemory,
   InferredIntent,
   IntentCategory,
+  CommandRunSummary,
   MemoryContextMode,
   MemoryConfidence,
+  DecisionSummary,
+  ErrorSummary,
+  Evidence,
+  EvidenceType,
+  FileTouchSummary,
+  LessonApprovalStatus,
+  LessonCandidate,
+  LessonCandidateType,
   MemoryAssociation,
   MemoryKind,
   MemoryPatch,
@@ -22,7 +31,12 @@ export type {
   MemorySensitivity,
   MemoryStatus,
   NewMemoryRecord,
-  PromptPolicy
+  PromptPolicy,
+  SourceRef,
+  TaskObservation,
+  TaskObservationPrivacyStatus,
+  TaskOutcome,
+  TestRunSummary
 } from "./memory";
 
 export type {

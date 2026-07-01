@@ -3,9 +3,9 @@ import {
   createShortMemoryNote,
   evaluateShortMemoryForPromotion,
   promoteShortMemoryToLongMemory,
+  proposeLessonCandidate,
   retrieveMemoryForTask,
   retrieveShortMemoryForTask,
-  saveLessonAfterTask,
   searchProjectMemory,
   type LibraryZone,
   type ProjectMemorySearchResult,
@@ -153,7 +153,7 @@ export interface MindReflectionResult {
     confidence: number;
   };
   actions: Array<{
-    type: "short_memory" | "long_memory" | "promotion";
+    type: "short_memory" | "lesson_candidate" | "promotion";
     status: "created" | "skipped" | "promoted";
     id?: string;
     title?: string;
@@ -533,19 +533,32 @@ export async function reflectAfterTask(input: ReflectAfterTaskInput): Promise<Mi
   ].filter(Boolean).join("\n");
 
   if (shouldSaveLongLesson(input, intent)) {
-    const lesson = await saveLessonAfterTask(
+    const lesson = await proposeLessonCandidate(
       {
-        task: input.task,
-        whatChanged: input.summary,
-        bugFound: input.bugsFound?.join("; "),
-        fixApplied: input.testsRun && input.testsRun.length > 0 ? `Tests run: ${input.testsRun.join(", ")}` : undefined,
-        lesson: createReflectionLesson(input, intent),
-        filesTouched: input.filesChanged,
-        risk: input.risks?.join("; ")
+        observation: {
+          taskTitle: input.task,
+          taskSummary: input.summary,
+          agent: "mind-reflection",
+          filesTouched: (input.filesChanged ?? []).map((file) => ({ path: file, changeType: "modified" as const })),
+          commandsRun: (input.testsRun ?? []).map((command) => ({
+            command,
+            exitCode: null,
+            status: "unknown" as const,
+            outputRedacted: true as const
+          })),
+          tests: (input.testsRun ?? []).map((command) => ({ name: command, command, status: "unknown" as const })),
+          errors: (input.bugsFound ?? []).map((message) => ({ message, severity: "medium" as const })),
+          decisions: (input.decisionsMade ?? []).map((decision) => ({ decision, source: "reflection" })),
+          outcome: input.risks && input.risks.length > 0 ? "partial" : "unknown",
+          sourceRefs: (input.filesChanged ?? []).map((file) => ({ ref: file, kind: "file" as const }))
+        },
+        agentProposedLesson: createReflectionLesson(input, intent),
+        lessonType: "workflow",
+        appliesTo: input.filesChanged
       },
       { cwd }
     );
-    actions.push({ type: "long_memory", status: "created", id: lesson.lesson.id, title: lesson.lesson.title, reason: "Reusable lesson or durable rule detected." });
+    actions.push({ type: "lesson_candidate", status: "created", id: lesson.candidate.id, title: lesson.candidate.title, reason: "Reusable lesson candidate created; approval required before long-term memory." });
   } else if (shouldSaveShortCheckpoint(input)) {
     const note = await createShortMemoryNote(
       {

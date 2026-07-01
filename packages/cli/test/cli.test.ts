@@ -217,34 +217,38 @@ describe("LMTI CLI commands", () => {
   it("context command uses intent to return partner permission lessons and filter logo memory", async () => {
     const cwd = await createFixtureProject();
     await compileCommand(cwd);
-    await rememberCommand(cwd, [
-      "--kind",
-      "lesson",
-      "--title",
-      "Partner route rule",
-      "--content",
-      "Partner user must route to /partner. /dashboard/summary returning 403 is correct due to least privilege.",
-      "--tags",
-      "partner,routing,permission,dashboard",
-      "--sensitivity",
-      "internal",
-      "--prompt-policy",
-      "summarize_only"
-    ]);
-    await rememberCommand(cwd, [
-      "--kind",
-      "lesson",
-      "--title",
-      "Dashboard logo rule",
-      "--content",
-      "Dashboard logo brand image asset must stay aligned.",
-      "--tags",
-      "dashboard,logo,brand,asset",
-      "--sensitivity",
-      "internal",
-      "--prompt-policy",
-      "summarize_only"
-    ]);
+    await createMemory(
+      {
+        scope: "long_term",
+        kind: "lesson",
+        title: "Partner route rule",
+        content: "Partner user must route to /partner. /dashboard/summary returning 403 is correct due to least privilege.",
+        projectId: "lmti-fixture",
+        sourceRefs: [],
+        tags: ["partner", "routing", "permission", "dashboard"],
+        importance: 0.9,
+        confidence: "high",
+        sensitivity: "internal",
+        promptPolicy: "summarize_only"
+      },
+      { cwd }
+    );
+    await createMemory(
+      {
+        scope: "long_term",
+        kind: "lesson",
+        title: "Dashboard logo rule",
+        content: "Dashboard logo brand image asset must stay aligned.",
+        projectId: "lmti-fixture",
+        sourceRefs: [],
+        tags: ["dashboard", "logo", "brand", "asset"],
+        importance: 0.9,
+        confidence: "high",
+        sensitivity: "internal",
+        promptPolicy: "summarize_only"
+      },
+      { cwd }
+    );
 
     const context = await contextCommand(cwd, "partner user bị 403 dashboard summary");
 
@@ -505,13 +509,13 @@ describe("LMTI CLI commands", () => {
     expect(result.samples.every((sample) => sample.adapterAllowed)).toBe(true);
   });
 
-  it("remember creates lessons and task done records task events", async () => {
+  it("remember stores non-lesson memory and sends lessons to the proposal workflow", async () => {
     const cwd = await createFixtureProject();
     await compileCommand(cwd);
 
-    const lesson = await rememberCommand(cwd, [
+    const rule = await rememberCommand(cwd, [
       "--kind",
-      "lesson",
+      "rule",
       "--title",
       "Partner route rule",
       "--content",
@@ -523,8 +527,24 @@ describe("LMTI CLI commands", () => {
       "--prompt-policy",
       "summarize_only"
     ]);
-    expect(lesson.kind).toBe("lesson");
-    await expect(readFile(path.join(cwd, ".lmti", "memory", "lessons.json"), "utf8")).resolves.toContain("Partner route rule");
+    expect("kind" in rule ? rule.kind : undefined).toBe("rule");
+    await expect(readFile(path.join(cwd, ".lmti", "memory", "long-term.json"), "utf8")).resolves.toContain("Partner route rule");
+
+    await expect(rememberCommand(cwd, [
+      "--kind",
+      "lesson",
+      "--title",
+      "Partner route lesson",
+      "--content",
+      "Partner user must route to /partner.",
+      "--tags",
+      "partner,routing,permission",
+      "--sensitivity",
+      "internal",
+      "--prompt-policy",
+      "summarize_only"
+    ])).rejects.toThrow("memory lesson propose");
+    await expect(readFile(path.join(cwd, ".lmti", "memory", "lessons.json"), "utf8")).resolves.not.toContain("Partner route lesson");
 
     const done = await taskDoneCommand(cwd, [
       "--title",
@@ -535,8 +555,61 @@ describe("LMTI CLI commands", () => {
       "Partner user must route to /partner."
     ]);
 
-    expect(done.lessonMemory?.kind).toBe("lesson");
+    expect(done.lessonMemory).toBeUndefined();
+    expect(done.lessonCandidate?.approvalStatus).toBe("needs_review");
+    expect(done.lessonCandidate?.privacyStatus).toBe("pass");
     await expect(readFile(path.join(cwd, ".lmti", "events", "tasks.jsonl"), "utf8")).resolves.toContain("Partner 403 route task");
+  });
+
+  it("CLI proposes lesson candidates and requires approval before retrieval", async () => {
+    const cwd = await createFixtureProject();
+    await initCommand(cwd);
+
+    const proposal = JSON.parse(
+      (
+        await runCliInFixture(cwd, [
+          "memory",
+          "lesson",
+          "propose",
+          "--task",
+          "Packing lesson approval workflow",
+          "--summary",
+          "Verified packing label behavior with a passing test.",
+          "--lesson",
+          "When changing packing label behavior, keep the lesson pending until evidence is reviewed.",
+          "--files-touched",
+          "src/orders/packing.ts:modified",
+          "--commands",
+          "npm test:0",
+          "--tests",
+          "npm test:pass",
+          "--outcome",
+          "pass",
+          "--source-refs",
+          "src/orders/packing.ts:file"
+        ])
+      ).stdout
+    ) as { candidate: { id: string; approvalStatus: string; privacyStatus: string; confidence: number } };
+
+    const candidates = JSON.parse((await runCliInFixture(cwd, ["memory", "lesson", "candidates"])).stdout) as Array<{ id: string }>;
+    const beforeApproval = JSON.parse((await runCliInFixture(cwd, ["memory", "retrieve", "packing lesson approval workflow"])).stdout) as Array<{ item: { source?: string } }>;
+    const doctor = await doctorSecurityCommand(cwd);
+    const approved = JSON.parse((await runCliInFixture(cwd, ["memory", "lesson", "approve", proposal.candidate.id])).stdout) as {
+      candidate: { approvalStatus: string };
+      memory: { id: string; source?: string; sourceType?: string };
+    };
+    const afterApproval = JSON.parse((await runCliInFixture(cwd, ["memory", "retrieve", "packing lesson approval workflow"])).stdout) as Array<{ item: { id: string; source?: string } }>;
+
+    expect(proposal.candidate.approvalStatus).toBe("pending");
+    expect(proposal.candidate.privacyStatus).toBe("pass");
+    expect(proposal.candidate.confidence).toBeGreaterThanOrEqual(0.7);
+    expect(candidates.map((candidate) => candidate.id)).toContain(proposal.candidate.id);
+    expect(beforeApproval.map((result) => result.item.source)).not.toContain(`lesson_candidate:${proposal.candidate.id}`);
+    expect(doctor.status).toBe("warn");
+    expect(doctor.checks.some((check) => check.id === "lesson-candidates" && check.status === "warn")).toBe(true);
+    expect(approved.candidate.approvalStatus).toBe("approved");
+    expect(approved.memory.sourceType).toBe("lesson_candidate");
+    expect(afterApproval.map((result) => result.item.id)).toContain(approved.memory.id);
   });
 
   it("experiment thinking saves a local reduction report", async () => {

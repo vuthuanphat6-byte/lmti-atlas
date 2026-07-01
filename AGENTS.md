@@ -235,17 +235,18 @@ Before making changes, Codex should:
 3. Prefer compiled understanding over repeatedly scanning the entire repository.
 4. Respect .lmti privacy rules.
 5. Never expose secret memory or confidential project knowledge in raw form.
-6. After completing a task, summarize what changed and suggest what should be stored as long-term memory.
-7. If a task reveals a reusable rule, bug, route, deploy note, permission rule or architecture constraint, prefer `lmti task done --lesson "..."` or `lmti memory consolidate` over storing raw chat.
-8. LMTI World Model Rule: agent must not treat memory as reality. Memory is prior belief; source code, tests, tool output and explicit user instruction are observations. When memory conflicts with observation, run reality check and update belief.
-9. LMTI Neural Boundary Rule: do not duplicate context, memory, privacy or cognitive focus logic. Use `@atlas/kernel` for intent and Context Pack scoring, `@atlas/memory` for lifecycle/retrieval, `@atlas/privacy` for redaction/gates, `@atlas/cognition` for focus/global workspace, `@atlas/world-model` for observations/beliefs, `@atlas/security` for tool permission, `@atlas/runtime` for orchestration and `@atlas/cli` only as a command adapter.
-10. Security rules for agents: never print secrets, never bypass LMTI privacy gates, verify security-sensitive memory against source evidence, do not execute tools without SecurityGuard approval, do not widen permissions to make a task pass, and record safe lessons without raw secrets after security-sensitive work.
+6. After completing a task, summarize what changed and propose lesson candidates instead of storing raw chat.
+7. If a task reveals a reusable rule, bug, route, deploy note, permission rule or architecture constraint, prefer `lmti task done --lesson "..."` or `lmti memory lesson propose`; approve only after privacy/evidence review.
+8. Treat memory as prior belief, not reality. Source code, tests, tool output and explicit user instruction are observations.
+9. Use framework detection before planning build/test/risk steps on unfamiliar projects.
+10. Do not bypass LMTI privacy gates, do not widen permissions to make a task pass, and never print secrets.
 
 Suggested local command:
 
 lmti context "<task>"
-lmti memory explain "<task>"
-lmti memory review
-lmti world check "<task>"
+lmti mind context "<task>"
+lmti framework detect
+lmti preflight "<task>" --role developer --model-target external_model
+lmti memory lesson candidates
 lmti doctor --security
 <!-- LMTI:END -->

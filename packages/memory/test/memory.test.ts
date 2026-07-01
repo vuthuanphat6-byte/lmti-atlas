@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { readAuditEvents } from "@atlas/privacy";
 import {
   addProjectMemory,
+  approveLessonCandidate,
   checkProjectMemoryPrivacy,
   classifyLibraryMemory,
   cleanupShortMemoryNotes,
@@ -18,23 +19,26 @@ import {
   evaluateShortMemoryForPromotion,
   explainMemory,
   expireShortMemoryNotes,
+  getLessonCandidateReviewSummary,
   getMemoryAssociations,
   getProjectMemoryStats,
   InMemoryStore,
   initProjectMemoryStorage,
+  listLessonCandidates,
   listMemory,
   LongTermMemory,
   promoteMemory,
   recordTaskDone,
   promoteShortMemoryToLongMemory,
+  proposeLessonCandidate,
   retrieveMemoryContextForTask,
   reinforceMemory,
   retrieveMemoryForTask,
   retrieveShortMemoryForTask,
-  saveLessonAfterTask,
   searchMemory,
   searchMemoryForContext,
   searchProjectMemory,
+  rejectLessonCandidate,
   ShortTermMemory,
   updateProjectMemory
 } from "../src/index";
@@ -646,7 +650,7 @@ describe("Project Operating Memory SQLite Library Layer", () => {
     db.close();
 
     expect(storage.dbPath.endsWith("project-memory.sqlite")).toBe(true);
-    expect(storage.schemaVersion).toBe(3);
+    expect(storage.schemaVersion).toBe(4);
     expect(memory.zone).toBe("workflow");
     expect(memory.contentHash).toMatch(/^[a-f0-9]{64}$/);
     expect(updated.contentHash).toMatch(/^[a-f0-9]{64}$/);
@@ -654,7 +658,8 @@ describe("Project Operating Memory SQLite Library Layer", () => {
     expect(storedHash.content_hash).toBe(updated.contentHash);
     expect(migrations).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ version: 3, name: "memory_content_hashes" })
+        expect.objectContaining({ version: 3, name: "memory_content_hashes" }),
+        expect.objectContaining({ version: 4, name: "lesson_proposal_pipeline" })
       ])
     );
     expect(stats.total).toBe(1);
@@ -767,24 +772,107 @@ describe("Project Operating Memory SQLite Library Layer", () => {
     expect(results.map((result) => result.item.title)).not.toContain("Dashboard logo rule");
   });
 
-  it("saves post-task lessons and retrieves them by matching intent", async () => {
+  it("proposes evidence-backed lesson candidates and only retrieves them after approval", async () => {
     const cwd = await createWorkspace();
-    const saved = await saveLessonAfterTask(
+    const proposal = await proposeLessonCandidate(
       {
-        task: "Partner dashboard 403 route fix",
-        whatChanged: "Confirmed route behavior.",
-        fixApplied: "Documented least privilege behavior.",
-        lesson: "Partner user must route through /partner; dashboard 403 can be expected.",
-        filesTouched: ["packages/memory/src/sqlite-store.ts"],
-        risk: "permission regression"
+        observation: {
+          taskId: "task-level-2",
+          taskTitle: "Level 2 lesson proposal pipeline",
+          taskSummary: "Added privacy, evidence, confidence and approval gates for lesson candidates.",
+          agent: "codex",
+          filesTouched: [
+            {
+              path: "packages/memory/src/sqlite-store.ts",
+              changeType: "modified",
+              changeSummary: "Added candidate storage and approval lifecycle."
+            }
+          ],
+          commandsRun: [
+            {
+              command: "npm test packages/memory/test/memory.test.ts",
+              exitCode: 0,
+              status: "pass",
+              outputSummary: "targeted memory tests passed",
+              outputRedacted: true
+            }
+          ],
+          tests: [
+            {
+              name: "memory lesson proposal tests",
+              status: "pass",
+              command: "npm test packages/memory/test/memory.test.ts"
+            }
+          ],
+          decisions: [
+            {
+              decision: "Pending candidates must not be injected into context.",
+              source: "user"
+            }
+          ],
+          outcome: "pass",
+          sourceRefs: [{ ref: "packages/memory/src/sqlite-store.ts", kind: "file" }]
+        },
+        agentProposedLesson: "Lesson candidates should remain pending until a reviewer approves evidence-backed, privacy-safe content.",
+        lessonType: "workflow"
       },
       { cwd }
     );
 
-    const retrieved = await retrieveMemoryForTask("partner dashboard permission 403", { cwd, limit: 5 });
+    const candidates = await listLessonCandidates({ cwd });
+    const beforeApproval = await retrieveMemoryForTask("Level 2 lesson proposal approval workflow", { cwd });
+    const approved = await approveLessonCandidate(proposal.candidate.id, { cwd });
+    const afterApproval = await retrieveMemoryForTask("Level 2 lesson proposal approval workflow", { cwd });
 
-    expect(saved.lesson.zone).toBe("lesson");
-    expect(retrieved.map((result) => result.item.id)).toContain(saved.lesson.id);
+    expect(proposal.candidate.privacyStatus).toBe("pass");
+    expect(proposal.candidate.approvalStatus).toBe("pending");
+    expect(proposal.candidate.confidence).toBe(0.9);
+    expect(proposal.candidate.evidence.map((entry) => entry.type)).toEqual(
+      expect.arrayContaining(["file_changed", "command_exit_code", "test_passed", "user_instruction", "privacy_check"])
+    );
+    expect(candidates.map((candidate) => candidate.id)).toContain(proposal.candidate.id);
+    expect(beforeApproval.map((result) => result.item.source)).not.toContain(`lesson_candidate:${proposal.candidate.id}`);
+    expect(approved.candidate.approvalStatus).toBe("approved");
+    expect(approved.memory.sourceType).toBe("lesson_candidate");
+    expect(afterApproval.map((result) => result.item.id)).toContain(approved.memory.id);
+  });
+
+  it("blocks secret-like lesson candidates from approval and review summaries flag them", async () => {
+    const cwd = await createWorkspace();
+    const rawSecret = "OPENAI_API_KEY=sk-proj-FAKE_TEST_VALUE_12345678901234567890";
+    const proposal = await proposeLessonCandidate(
+      {
+        observation: {
+          taskTitle: "Investigate leaked env output",
+          taskSummary: "Command output contained a secret-like fixture.",
+          commandsRun: [
+            {
+              command: "npm test",
+              exitCode: 1,
+              status: "fail",
+              outputSummary: `test output included ${rawSecret}`,
+              outputRedacted: true
+            }
+          ],
+          errors: [{ message: `redacted secret fixture ${rawSecret}`, severity: "high" }],
+          outcome: "fail"
+        },
+        agentProposedLesson: `Never store raw secret output such as ${rawSecret}.`,
+        lessonType: "security"
+      },
+      { cwd }
+    );
+
+    const summary = await getLessonCandidateReviewSummary({ cwd });
+
+    expect(proposal.candidate.privacyStatus).toBe("blocked");
+    expect(proposal.candidate.approvalStatus).toBe("needs_review");
+    expect(JSON.stringify(proposal)).not.toContain(rawSecret);
+    await expect(approveLessonCandidate(proposal.candidate.id, { cwd })).rejects.toThrow("Privacy-blocked");
+    expect(summary.needsReview).toBe(1);
+    expect(summary.privacyWarnings).toBe(1);
+    const rejected = await rejectLessonCandidate(proposal.candidate.id, { cwd });
+    expect(rejected.approvalStatus).toBe("rejected");
   });
 
   it("keeps FTS triggers in sync on update and delete", async () => {
