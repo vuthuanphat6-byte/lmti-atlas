@@ -6,7 +6,7 @@ const amf: AmfDocument = {
   version: "0.0.1",
   generatedAt: "2026-06-27T00:00:00.000Z",
   project: {
-    name: "NOIR ERP",
+    name: "Sample Project",
     root: "/project",
     compiledAt: "2026-06-27T00:00:00.000Z",
     atlasVersion: "0.0.0",
@@ -64,7 +64,7 @@ const amf: AmfDocument = {
 describe("Runtime MVP-0", () => {
   it("inspects AMF stats", () => {
     expect(inspectAmf(amf)).toMatchObject({
-      project: "NOIR ERP",
+      project: "Sample Project",
       files: 1,
       modules: 1,
       rules: 1
@@ -90,7 +90,7 @@ describe("Runtime MVP-0", () => {
             kind: "rule",
             title: "Packing label rule",
             content: "A shipping label can only be printed when all products are completed.",
-            projectId: "NOIR ERP",
+            projectId: "Sample Project",
             sourceRefs: [],
             tags: ["packing", "label"],
             importance: 0.9,
@@ -109,7 +109,7 @@ describe("Runtime MVP-0", () => {
             kind: "system_note",
             title: "Secret packing credential",
             content: "Do not expose this secret.",
-            projectId: "NOIR ERP",
+            projectId: "Sample Project",
             sourceRefs: [],
             tags: ["packing"],
             importance: 1,
@@ -131,10 +131,12 @@ describe("Runtime MVP-0", () => {
     const runtime = createDefaultRuntime();
     const session = runtime.startSession({ agentId: "developer" });
 
-    await runtime.sendMessage(session.id, "Nho rang khach hang nay can module in ao DTF");
-    const result = await runtime.sendMessage(session.id, "Khach hang nay can module gi?");
+    await runtime.sendMessage(session.id, "Remember that this project needs a label printing module.");
+    const result = await runtime.sendMessage(session.id, "What module does this project need?");
+    const toolResult = await runtime.execute(session.id, "echo", { message: "audit smoke" });
 
-    expect(result.response.message).toContain("module in ao DTF");
+    expect(result.response.message).toContain("label printing module");
+    expect(toolResult.ok).toBe(true);
     expect(await runtime.getShortTermMemory().list()).toHaveLength(2);
     expect(await runtime.getLongTermMemory().list()).toHaveLength(1);
     expect(runtime.getSecurityGuard().getAuditLogs().length).toBeGreaterThan(0);
@@ -158,21 +160,21 @@ describe("Runtime MVP-0", () => {
     expect(result.error).toContain("not allowed");
   });
 
-  it("supports the Vietnamese memory/security acceptance dialogue", async () => {
+  it("supports the memory/security acceptance dialogue", async () => {
     const runtime = createDefaultRuntime();
     const session = runtime.startSession({ agentId: "developer" });
 
-    const saved = await runtime.sendMessage(session.id, "Nhớ rằng dự án này là ERP cho NOIR GARMENT LAB.");
-    expect(saved.response.message).toContain("Đã lưu vào memory");
+    const saved = await runtime.sendMessage(session.id, "Remember that this repository is a sample packing workflow.");
+    expect(saved.response.message).toContain("Saved to memory");
 
-    const recalled = await runtime.sendMessage(session.id, "Khách hàng này đang làm dự án gì?");
-    expect(recalled.response.message).toContain("Dự án ERP cho NOIR GARMENT LAB");
+    const recalled = await runtime.sendMessage(session.id, "What kind of project is this repository?");
+    expect(recalled.response.message).toContain("sample packing workflow");
 
-    const audit = await runtime.sendMessage(session.id, "Chạy tool đọc audit log.");
+    const audit = await runtime.sendMessage(session.id, "Read the audit log.");
     expect(audit.response.message).toContain("Security approved");
-    expect(audit.response.message).toContain("audit log");
+    expect(audit.response.message).toContain("Audit log");
 
-    const blocked = await runtime.sendMessage(session.id, "Xóa toàn bộ database.");
+    const blocked = await runtime.sendMessage(session.id, "Delete the entire database.");
     expect(blocked.response.message).toContain("Security blocked");
     expect(blocked.response.message).toContain("admin/database");
   });

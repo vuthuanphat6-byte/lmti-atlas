@@ -1,6 +1,10 @@
-# ATLAS Playground
+# LMTI Runtime Playground
 
-Local CLI playground for Phase 4 Core AI Runtime.
+Local CLI playground for the experimental runtime package.
+
+This app is a smoke-test surface for local memory, sample agents and
+`SecurityGuard`. It is not a production agent runtime and is not part of the
+primary Codex-first LMTI workflow.
 
 Run:
 

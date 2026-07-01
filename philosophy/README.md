@@ -1,12 +1,15 @@
 # LMTI Philosophy
 
+This is a research/archive area, not current product documentation.
+
 This directory does not describe implementation.
 
 It describes why LMTI exists.
 
 Every contributor should read these notes before contributing code.
 
-They are written as founder notes, not product documentation.
+They are written as founder notes, not product documentation. If these notes
+conflict with the root README or current docs, the current docs win.
 
 The underscore-numbered files below are the canonical reading path.
 

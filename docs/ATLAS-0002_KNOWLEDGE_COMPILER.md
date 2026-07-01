@@ -1,5 +1,9 @@
 # ATLAS-0002: Knowledge Compiler
 
+> Research archive. Use this as historical design context only. Current product
+> docs are `README.md`, `docs/architecture.md`, `docs/privacy-model.md` and
+> `docs/verification-model.md`.
+
 Version: 0.1
 
 Status: Draft
@@ -99,7 +103,7 @@ Inputs must be treated as untrusted.
 The compiler produces an AMF file:
 
 ```text
-NOIR.amf
+sample-project.amf
 ```
 
 The AMF file is Project DNA.
@@ -163,7 +167,7 @@ Architecture...
 
 Done.
 
-NOIR.amf generated.
+sample-project.amf generated.
 ```
 
 The progress UI is not the product.

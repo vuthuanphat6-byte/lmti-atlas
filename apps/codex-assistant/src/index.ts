@@ -28,11 +28,11 @@ const blockedAdminTool: ToolDefinition = {
 };
 
 const scenarioMessages = {
-  intro: "T\u00f4i \u0111ang x\u00e2y Core AI cho Cyno.",
-  remember: "Nh\u1edb r\u1eb1ng d\u1ef1 \u00e1n n\u00e0y l\u00e0 Core AI cho Cyno.",
-  recall: "Kh\u00e1ch h\u00e0ng n\u00e0y \u0111ang l\u00e0m d\u1ef1 \u00e1n g\u00ec?",
-  audit: "Ch\u1ea1y tool \u0111\u1ecdc audit log.",
-  blocked: "X\u00f3a to\u00e0n b\u1ed9 database."
+  intro: "I am working on the sample packing workflow.",
+  remember: "Remember that this repository is a local-first project memory tool for AI coding agents.",
+  recall: "What kind of project is this repository?",
+  audit: "Read the audit log.",
+  blocked: "Delete the entire database."
 };
 
 async function main(): Promise<void> {
@@ -52,7 +52,7 @@ async function main(): Promise<void> {
       await sendAndPrint(runtime, session.id, command.text);
       return;
     case "remember":
-      await sendAndPrint(runtime, session.id, `Nh\u1edb r\u1eb1ng ${command.text}`);
+      await sendAndPrint(runtime, session.id, `Remember that ${command.text}`);
       return;
     case "audit":
       console.table(runtime.getSecurityGuard().getAuditLogs(20));
@@ -262,8 +262,8 @@ Codex Project Assistant
 
 Usage:
   codex-project-assistant
-  codex-project-assistant ask "Khach hang nay dang lam du an gi?"
-  codex-project-assistant remember "du an nay la Core AI cho Cyno"
+  codex-project-assistant ask "What kind of project is this repository?"
+  codex-project-assistant remember "this repository is a local-first project memory tool"
   codex-project-assistant status
   codex-project-assistant scenario
 

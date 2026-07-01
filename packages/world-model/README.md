@@ -1,12 +1,12 @@
 # @atlas/world-model
 
-Reality Boundary and resource-bounded active inference for LMTI.
+Experimental reality-check helpers for LMTI.
 
 This package does not claim AGI or consciousness. It models a deterministic,
 local-first boundary between:
 
 ```text
-Internal Model <-> Markov Blanket <-> External World
+Memory belief <-> filtered observation <-> source/test/tool evidence
 ```
 
 The world model never executes tools and never reads raw stores directly. It
@@ -26,3 +26,6 @@ Core APIs:
 * `runWorldModelCycle`
 
 Secret-like sensory input is redacted and marked `do_not_prompt`.
+
+This package is experimental support code. Memory remains guidance, not truth;
+source, tests, build output and explicit user instruction are stronger evidence.

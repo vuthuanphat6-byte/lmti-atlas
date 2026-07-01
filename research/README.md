@@ -1,5 +1,7 @@
 # Research
 
+This is not current product documentation.
+
 This directory is for research notes.
 
 Not implementation plans.

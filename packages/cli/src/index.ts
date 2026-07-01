@@ -165,8 +165,13 @@ const DEFAULT_ADAPTER_PRIVACY_PROFILE: AdapterPrivacyProfile = {
 
 const KNOWN_ADAPTERS = new Set(["codex", "claude-code", "cursor", "aider", "continue", "mcp", "openai-agents", "langchain", "crewai", "autogen", "generic", "custom"]);
 
-export async function main(argv: string[]): Promise<void> {
+export interface CliMainOptions {
+  cwd?: string;
+}
+
+export async function main(argv: string[], options: CliMainOptions = {}): Promise<void> {
   const [command, ...args] = argv;
+  const cwd = options.cwd ?? process.cwd();
 
   switch (command) {
     case "init":
@@ -206,7 +211,7 @@ export async function main(argv: string[]): Promise<void> {
       await runFramework(args);
       return;
     case "actions":
-      await runActions(args);
+      await runActions(args, cwd);
       return;
     case "cognition":
       await runCognition(args);
@@ -1971,51 +1976,51 @@ async function runFrameworkMonorepoMap(args: string[]): Promise<void> {
   printSafeJson(map, "framework monorepo-map");
 }
 
-async function runActions(args: string[]): Promise<void> {
+async function runActions(args: string[], cwd: string): Promise<void> {
   const [subcommand, ...rest] = args;
   switch (subcommand) {
     case "start":
-      await runActionsStart(rest);
+      await runActionsStart(rest, cwd);
       return;
     case "log":
-      await runActionsLog(rest);
+      await runActionsLog(rest, cwd);
       return;
     case "command":
-      await runActionsCommand(rest);
+      await runActionsCommand(rest, cwd);
       return;
     case "decision":
-      await runActionsDecision(rest);
+      await runActionsDecision(rest, cwd);
       return;
     case "memory":
-      await runActionsMemory(rest);
+      await runActionsMemory(rest, cwd);
       return;
     case "reflection":
-      await runActionsReflection(rest);
+      await runActionsReflection(rest, cwd);
       return;
     case "end":
-      await runActionsEnd(rest);
+      await runActionsEnd(rest, cwd);
       return;
     case "list":
-      await runActionsList(rest);
+      await runActionsList(rest, cwd);
       return;
     case "show":
-      await runActionsShow(rest);
+      await runActionsShow(rest, cwd);
       return;
     case "risks":
-      await runActionsRisks(rest);
+      await runActionsRisks(rest, cwd);
       return;
     case "replay":
-      await runActionsReplay(rest);
+      await runActionsReplay(rest, cwd);
       return;
     case "stats":
-      printSafeJson(await getCodexActionStats({ cwd: process.cwd() }), "actions stats");
+      printSafeJson(await getCodexActionStats({ cwd }), "actions stats");
       return;
     default:
       throw new Error('Usage: lmti actions <start|log|command|decision|memory|reflection|end|list|show|risks|replay|stats>');
   }
 }
 
-async function runActionsStart(args: string[]): Promise<void> {
+async function runActionsStart(args: string[], cwd: string): Promise<void> {
   const { flags } = parseArgs(args);
   const task = stringFlag(flags, "task");
   if (!task) {
@@ -2023,7 +2028,7 @@ async function runActionsStart(args: string[]): Promise<void> {
   }
   printSafeJson(
     await startCodexSession({
-      cwd: process.cwd(),
+      cwd,
       task,
       branch: stringFlag(flags, "branch"),
       intent: stringFlag(flags, "intent")
@@ -2032,7 +2037,7 @@ async function runActionsStart(args: string[]): Promise<void> {
   );
 }
 
-async function runActionsLog(args: string[]): Promise<void> {
+async function runActionsLog(args: string[], cwd: string): Promise<void> {
   const { flags } = parseArgs(args);
   const sessionId = requiredStringFlag(flags, "session-id", "Usage: lmti actions log --session-id <id> --type file_read --file <path>");
   const type = parseCodexActionType(stringFlag(flags, "type") ?? "decision_made");
@@ -2043,7 +2048,7 @@ async function runActionsLog(args: string[]): Promise<void> {
     const eventType = actionTypeToFileEvent(type);
     printSafeJson(
       await logCodexFileEvent({
-        cwd: process.cwd(),
+        cwd,
         sessionId,
         filePath: file,
         eventType,
@@ -2058,7 +2063,7 @@ async function runActionsLog(args: string[]): Promise<void> {
 
   printSafeJson(
     await logCodexAction({
-      cwd: process.cwd(),
+      cwd,
       sessionId,
       actionType: type,
       title,
@@ -2070,13 +2075,13 @@ async function runActionsLog(args: string[]): Promise<void> {
   );
 }
 
-async function runActionsCommand(args: string[]): Promise<void> {
+async function runActionsCommand(args: string[], cwd: string): Promise<void> {
   const { flags } = parseArgs(args);
   const sessionId = requiredStringFlag(flags, "session-id", "Usage: lmti actions command --session-id <id> --command \"npm test\" --exit-code 0");
   const command = requiredStringFlag(flags, "command", "Usage: lmti actions command --session-id <id> --command \"npm test\" --exit-code 0");
   printSafeJson(
     await logCodexCommandEvent({
-      cwd: process.cwd(),
+      cwd,
       sessionId,
       command,
       commandCwd: stringFlag(flags, "cwd"),
@@ -2089,13 +2094,13 @@ async function runActionsCommand(args: string[]): Promise<void> {
   );
 }
 
-async function runActionsDecision(args: string[]): Promise<void> {
+async function runActionsDecision(args: string[], cwd: string): Promise<void> {
   const { flags } = parseArgs(args);
   const sessionId = requiredStringFlag(flags, "session-id", "Usage: lmti actions decision --session-id <id> --decision \"...\" --reason \"...\"");
   const decision = requiredStringFlag(flags, "decision", "Usage: lmti actions decision --session-id <id> --decision \"...\" --reason \"...\"");
   printSafeJson(
     await logCodexDecision({
-      cwd: process.cwd(),
+      cwd,
       sessionId,
       decision,
       reason: stringFlag(flags, "reason"),
@@ -2108,13 +2113,13 @@ async function runActionsDecision(args: string[]): Promise<void> {
   );
 }
 
-async function runActionsMemory(args: string[]): Promise<void> {
+async function runActionsMemory(args: string[], cwd: string): Promise<void> {
   const { flags } = parseArgs(args);
   const sessionId = requiredStringFlag(flags, "session-id", "Usage: lmti actions memory --session-id <id> --memory-id <id> --memory-type long");
   const memoryId = requiredStringFlag(flags, "memory-id", "Usage: lmti actions memory --session-id <id> --memory-id <id> --memory-type long");
   printSafeJson(
     await logCodexMemoryUsage({
-      cwd: process.cwd(),
+      cwd,
       sessionId,
       memoryId,
       memoryType: parseCodexMemoryType(stringFlag(flags, "memory-type") ?? "long"),
@@ -2126,12 +2131,12 @@ async function runActionsMemory(args: string[]): Promise<void> {
   );
 }
 
-async function runActionsReflection(args: string[]): Promise<void> {
+async function runActionsReflection(args: string[], cwd: string): Promise<void> {
   const { flags } = parseArgs(args);
   const sessionId = requiredStringFlag(flags, "session-id", "Usage: lmti actions reflection --session-id <id> --summary \"...\"");
   printSafeJson(
     await logCodexReflection({
-      cwd: process.cwd(),
+      cwd,
       sessionId,
       taskSummary: stringFlag(flags, "summary"),
       filesChanged: parseCsv(stringFlag(flags, "files-changed")),
@@ -2146,12 +2151,12 @@ async function runActionsReflection(args: string[]): Promise<void> {
   );
 }
 
-async function runActionsEnd(args: string[]): Promise<void> {
+async function runActionsEnd(args: string[], cwd: string): Promise<void> {
   const { flags } = parseArgs(args);
   const sessionId = requiredStringFlag(flags, "session-id", "Usage: lmti actions end --session-id <id> --status completed");
   printSafeJson(
     await endCodexSession({
-      cwd: process.cwd(),
+      cwd,
       sessionId,
       status: parseCodexSessionStatus(stringFlag(flags, "status") ?? "completed"),
       summary: stringFlag(flags, "summary")
@@ -2160,11 +2165,11 @@ async function runActionsEnd(args: string[]): Promise<void> {
   );
 }
 
-async function runActionsList(args: string[]): Promise<void> {
+async function runActionsList(args: string[], cwd: string): Promise<void> {
   const { flags } = parseArgs(args);
   printSafeJson(
     await listCodexSessions({
-      cwd: process.cwd(),
+      cwd,
       status: stringFlag(flags, "status") ? parseCodexSessionStatus(stringFlag(flags, "status") ?? "running") : undefined,
       limit: parseNumberFlag(flags, "limit", 50)
     }),
@@ -2172,13 +2177,13 @@ async function runActionsList(args: string[]): Promise<void> {
   );
 }
 
-async function runActionsShow(args: string[]): Promise<void> {
+async function runActionsShow(args: string[], cwd: string): Promise<void> {
   const { positional, flags } = parseArgs(args);
   const sessionId = positional[0] ?? stringFlag(flags, "session-id");
   if (!sessionId) {
     throw new Error("Usage: lmti actions show <session-id>");
   }
-  const detail = await getCodexSessionDetail(sessionId, { cwd: process.cwd() });
+  const detail = await getCodexSessionDetail(sessionId, { cwd });
   if (flags.html) {
     printSafeText(renderCodexSessionDetailHtml(detail));
     return;
@@ -2186,20 +2191,20 @@ async function runActionsShow(args: string[]): Promise<void> {
   printSafeJson(detail, "actions show");
 }
 
-async function runActionsRisks(args: string[]): Promise<void> {
+async function runActionsRisks(args: string[], cwd: string): Promise<void> {
   const { flags } = parseArgs(args);
-  printSafeJson(await listCodexRiskItems({ cwd: process.cwd(), limit: parseNumberFlag(flags, "limit", 50) }), "actions risks");
+  printSafeJson(await listCodexRiskItems({ cwd, limit: parseNumberFlag(flags, "limit", 50) }), "actions risks");
 }
 
-async function runActionsReplay(args: string[]): Promise<void> {
+async function runActionsReplay(args: string[], cwd: string): Promise<void> {
   const { positional, flags } = parseArgs(args);
   const sessionId = positional[0] ?? stringFlag(flags, "session-id");
   if (!sessionId) {
     throw new Error("Usage: lmti actions replay <session-id>");
   }
-  const replay = await getCodexReplay(sessionId, { cwd: process.cwd() });
+  const replay = await getCodexReplay(sessionId, { cwd });
   if (flags.html) {
-    const session = await getCodexSession(sessionId, { cwd: process.cwd() });
+    const session = await getCodexSession(sessionId, { cwd });
     if (!session) {
       throw new Error(`Codex session not found: ${sessionId}`);
     }
@@ -2743,7 +2748,7 @@ Commands:
   init      Create local .lmti storage.
   compile   Compile a project into .lmti/project.amf.json.
   migrate   Copy legacy Atlas state into canonical .lmti storage.
-  doctor    Diagnose duplicate/incomplete storage or security posture.
+  doctor    Diagnose storage, AMF noise, ignore rules and security posture.
   inspect   Print Project Mind stats from AMF.
   context   Build a Context Pack JSON from AMF and a task.
   preflight Build a policy-safe MVP context package with hard memory gates.

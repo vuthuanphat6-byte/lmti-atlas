@@ -1,9 +1,9 @@
 # @atlas/cognition
 
-Deterministic Cognitive Orchestrator for LMTI.
+Experimental deterministic context-arbitration helpers for LMTI.
 
 This package does not claim consciousness. It models a local, privacy-first
-project mind loop:
+context-selection loop:
 
 ```text
 working memory + long-term memory + context candidates
@@ -11,7 +11,7 @@ working memory + long-term memory + context candidates
   -> prediction state
   -> global workspace arbitration
   -> policy-safe broadcast
-  -> cognitive state explanation
+  -> state explanation
 ```
 
 `@atlas/cognition` does not read raw memory stores, call external AI APIs or
@@ -31,3 +31,7 @@ Core APIs:
 * `explainCognitiveState`
 
 Secret and `do_not_prompt` entries are never broadcast as raw content.
+
+This package is experimental support code. The current product focus remains
+the CLI, Project Atlas, privacy gates, preflight, memory and Codex-first local
+workflow.

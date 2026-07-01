@@ -1,6 +1,10 @@
 # RFC-0008: LMTI Human Cognitive Stack
 
-Status: Draft  
+> Research archive. This RFC uses brain/physics metaphors as exploratory design
+> language. It is not current product documentation and does not describe
+> implemented Local Alpha capability.
+
+Status: Draft
 Sprint: 0 architecture proposal  
 Audience: Coding Agent MVP, CLI, runtime, memory, privacy, kernel
 

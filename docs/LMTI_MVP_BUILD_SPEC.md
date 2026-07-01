@@ -33,7 +33,7 @@ egress scan
 redacted explanation
 append-only audit
 CLI preflight
-dashboard Agent loi fixture
+permission routing issue fixture
 acceptance tests
 ```
 
@@ -60,7 +60,7 @@ passes tests."
 The MVP is done when a developer can run:
 
 ```bash
-lmti preflight "dashboard Agent loi" --role developer --model-target external_model
+lmti preflight "permission routing issue" --role developer --model-target external_model
 ```
 
 and receive a policy-safe context package with selected memories, blocked
@@ -513,7 +513,7 @@ egress scan failed
 MVP command:
 
 ```bash
-lmti preflight "dashboard Agent loi" --role developer --model-target external_model
+lmti preflight "permission routing issue" --role developer --model-target external_model
 ```
 
 Required output shape:
@@ -549,7 +549,7 @@ The first fixture is fixed.
 Input:
 
 ```text
-dashboard Agent loi
+permission routing issue
 ```
 
 Memory pool:
@@ -635,7 +635,7 @@ Then effectiveContextRole is external_model.
 
 ```text
 Given deprecated partner /dashboard memory
-When task is dashboard Agent loi
+When task is permission routing issue
 Then it is blocked as deprecated_as_truth
 And it may appear only in blocked memory summary.
 ```
@@ -726,7 +726,7 @@ context package contains policyDecisionIds for every included memory
 explanation contains no raw blocked content
 audit contains no raw secret payload
 CLI output contains no raw blocked memory
-dashboard Agent loi fixture passes
+permission routing issue fixture passes
 ```
 
-This is the first buildable slice of LMTI as a cognitive kernel.
+This is the first buildable slice of LMTI's policy-safe preflight path.

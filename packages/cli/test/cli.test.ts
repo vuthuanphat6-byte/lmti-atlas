@@ -105,8 +105,12 @@ async function runCliInFixture(cwd: string, args: string[]): Promise<{ stdout: s
   };
 
   try {
-    process.chdir(cwd);
-    await main(args);
+    if (args[0] === "actions") {
+      await main(args, { cwd });
+    } else {
+      process.chdir(cwd);
+      await main(args);
+    }
   } finally {
     process.chdir(originalCwd);
     console.log = originalLog;
@@ -340,7 +344,7 @@ describe("LMTI CLI commands", () => {
         scope: "long_term",
         kind: "permission",
         title: "Internal dashboard permission note",
-        content: "Internal permission note for dashboard Agent.",
+        content: "Internal permission note for permission routing.",
         projectId: "lmti-fixture",
         sourceRefs: ["README.md:3"],
         tags: ["dashboard", "agent", "permission"],
@@ -352,7 +356,7 @@ describe("LMTI CLI commands", () => {
       { cwd }
     );
 
-    const result = await preflightCommand(cwd, "dashboard Agent loi", {
+    const result = await preflightCommand(cwd, "permission routing issue", {
       role: "developer",
       modelTarget: "external_model",
       now: new Date("2026-06-28T00:00:00.000Z")
@@ -558,11 +562,11 @@ describe("LMTI CLI commands", () => {
   it("actions CLI records a session lifecycle and returns detail", async () => {
     const cwd = await createFixtureProject();
     const start = JSON.parse(
-      (await runCliInFixture(cwd, ["actions", "start", "--task", "Fix dashboard Agent 403", "--branch", "feature/actions"])).stdout
+      (await runCliInFixture(cwd, ["actions", "start", "--task", "Fix permission routing", "--branch", "feature/actions"])).stdout
     ) as { id: string; status: string; task: string };
 
     expect(start.status).toBe("running");
-    expect(start.task).toBe("Fix dashboard Agent 403");
+    expect(start.task).toBe("Fix permission routing");
 
     await runCliInFixture(cwd, [
       "actions",
@@ -647,6 +651,22 @@ describe("LMTI CLI commands", () => {
     expect(detail.decisions[0]?.relatedMemoryIds).toContain("mem-1");
     expect(detail.memoryUsage[0]).toMatchObject({ memoryId: "mem-1", usedInDecision: true });
     expect(detail.reflections[0]?.testsRun).toContain("npm test");
+
+    const sqlite = await import("node:sqlite");
+    const db = new sqlite.DatabaseSync(path.join(cwd, ".lmti", "actions", "codex-actions.sqlite"));
+    try {
+      const foreignKeys = db.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number };
+      const violations = db.prepare("PRAGMA foreign_key_check").all();
+      const storedSession = db.prepare("SELECT id FROM codex_sessions WHERE id = ?").get(start.id) as { id: string } | undefined;
+      const fileEventSessions = db.prepare("SELECT DISTINCT session_id AS sessionId FROM codex_file_events").all() as Array<{ sessionId: string }>;
+
+      expect(foreignKeys.foreign_keys).toBe(1);
+      expect(violations).toEqual([]);
+      expect(storedSession).toEqual({ id: start.id });
+      expect(fileEventSessions).toEqual([{ sessionId: start.id }]);
+    } finally {
+      db.close();
+    }
   });
 
   it("framework CLI detects project framework and writes default config", async () => {
@@ -676,6 +696,15 @@ describe("LMTI CLI commands", () => {
     const start = JSON.parse(startResult.stdout) as { id: string };
 
     expect(start.id).toBeTruthy();
+
+    const sqlite = await import("node:sqlite");
+    const db = new sqlite.DatabaseSync(path.join(cwd, ".lmti", "actions", "codex-actions.sqlite"));
+    try {
+      const storedSession = db.prepare("SELECT id, task FROM codex_sessions WHERE id = ?").get(start.id);
+      expect(storedSession).toEqual({ id: start.id, task: "Investigate leaked env" });
+    } finally {
+      db.close();
+    }
 
     const commandResult = await runCliInFixture(cwd, [
       "actions",

@@ -1,5 +1,9 @@
 # ATLAS-0001: Artificial Mind
 
+> Research archive. This document is long-term vision, not a claim about the
+> current LMTI product. Current scope is local-first project memory and
+> verification for AI coding agents.
+
 Version: 0.1
 
 Status: Draft

@@ -1,4 +1,4 @@
-# NOIR ERP
+# Sample Project
 
 Sample project for ATLAS MVP-0.
 

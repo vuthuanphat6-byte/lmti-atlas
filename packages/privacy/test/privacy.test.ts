@@ -10,6 +10,7 @@ import {
   readAuditEvents,
   redactPII,
   redactSecrets,
+  redactText,
   retainAuditEvents,
   runEgressSecretScan,
   verifyAuditIntegrity
@@ -62,6 +63,15 @@ describe("Cognitive Privacy Layer", () => {
     expect(redactSecrets("password=super-secret")).toContain("[REDACTED]");
     expect(redactSecrets("token: abcdefghijklmnop")).toContain("[REDACTED]");
     expect(redactPII("Contact admin@example.com or +1 415-555-1212")).not.toContain("admin@example.com");
+  });
+
+  it("preserves opaque UUID command handles while redacting PII", () => {
+    const id = "34cbafe7-4155-493c-93c2-602d7fa7c482";
+    const output = redactText(JSON.stringify({ id, contact: "+1 415-555-1212" }));
+
+    expect(output).toContain(id);
+    expect(output).not.toContain("+1 415-555-1212");
+    expect(output).toContain("[REDACTED_PHONE]");
   });
 
   it("writes audit events for sensitive access", async () => {

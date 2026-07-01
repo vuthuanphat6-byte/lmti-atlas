@@ -92,7 +92,7 @@ describe("@atlas/world-model", () => {
   it("increases information density for complex input", () => {
     const simple = estimateInformationDensity({ text: "fix bug" });
     const complex = estimateInformationDensity({
-      text: "Fix dashboard Agent 403 route in src/routes.ts with dependency AuthGuard and risk secret production failure",
+      text: "Fix permission routing route in src/routes.ts with dependency AuthGuard and risk secret production failure",
       sourceRefs: ["src/routes.ts", "src/auth.ts"],
       contradictionCount: 2,
       uncertaintyCount: 2

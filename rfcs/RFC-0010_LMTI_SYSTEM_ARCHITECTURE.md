@@ -1,6 +1,9 @@
 # RFC-0010: LMTI System Architecture
 
-Status: Draft  
+> Research archive. This RFC contains broader architecture exploration and
+> roadmap language. It should not be read as current product support.
+
+Status: Draft
 Sprint: 0 architecture lock candidate  
 Audience: core, memory, privacy, kernel, CLI, SDK, server, dashboard, adapter, plugin, eval
 

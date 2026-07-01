@@ -197,9 +197,11 @@ export function redactSecrets(text: string): string {
 }
 
 export function redactPII(text: string): string {
-  return text
+  const protectedText = protectOpaqueIdentifiers(text);
+  const redacted = protectedText.value
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]")
     .replace(/(?:\+?\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)?\d{3,4}[\s.-]?\d{4}\b/g, "[REDACTED_PHONE]");
+  return protectedText.restore(redacted);
 }
 
 export function redactText(text: string): string {
@@ -440,6 +442,30 @@ const SECRET_REDACTION_PATTERNS: Array<{ regex: RegExp; replacement: string }> =
   { regex: /\b(api[_-]?key|secret|token|password|passwd|private[_-]?key)\b\s*[:=]\s*["']?[^"'\s<>]+/gi, replacement: "$1=[REDACTED]" },
   { regex: /\b([A-Z][A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|COOKIE|SESSION)[A-Z0-9_]*)\s*=\s*["']?[^"'\s<>]+/g, replacement: "$1=[REDACTED]" }
 ];
+
+const OPAQUE_IDENTIFIER_PATTERNS = [
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi
+];
+
+function protectOpaqueIdentifiers(text: string): { value: string; restore: (value: string) => string } {
+  const values: string[] = [];
+  let protectedValue = text;
+
+  for (const pattern of OPAQUE_IDENTIFIER_PATTERNS) {
+    protectedValue = protectedValue.replace(pattern, (match) => {
+      const placeholder = `__LMTI_OPAQUE_ID_${values.length}__`;
+      values.push(match);
+      return placeholder;
+    });
+  }
+
+  return {
+    value: protectedValue,
+    restore(value: string): string {
+      return values.reduce((result, original, index) => result.replaceAll(`__LMTI_OPAQUE_ID_${index}__`, original), value);
+    }
+  };
+}
 
 function stricterRole(left: AccessRole, right: AccessRole): AccessRole {
   return ROLE_STRENGTH[left] <= ROLE_STRENGTH[right] ? left : right;

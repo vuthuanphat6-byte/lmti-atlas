@@ -1,5 +1,8 @@
 # ATLAS Sprint 1: Knowledge Compiler PoC
 
+> Research archive. Current Project Atlas behavior is documented in the root
+> README and `docs/cli.md`.
+
 Version: 0.1
 
 Status: Proposed
@@ -70,7 +73,7 @@ Architecture...
 
 Done.
 
-NOIR.amf generated.
+sample-project.amf generated.
 ```
 
 ## Minimum AMF Domains

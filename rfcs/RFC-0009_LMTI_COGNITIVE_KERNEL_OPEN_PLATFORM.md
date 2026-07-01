@@ -1,6 +1,10 @@
 # RFC-0009: LMTI Cognitive Kernel Open Platform
 
-Status: Draft  
+> Research archive. This RFC describes a broad platform vision. Current LMTI is
+> a local-first project memory and verification layer for AI coding agents, with
+> Codex as the first workflow.
+
+Status: Draft
 Sprint: 0 platform architecture proposal  
 Audience: kernel, CLI, SDK, server, dashboard, adapters, plugin authors, open-source contributors
 

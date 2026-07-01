@@ -1,10 +1,15 @@
 # @atlas/runtime
 
-Core AI Runtime for ATLAS.
+Experimental local runtime helpers for LMTI.
 
-It orchestrates sessions, agents, memory, context loading, tool execution and security enforcement without requiring an external LLM.
+This package supports local demos and Codex-facing helper flows. It
+orchestrates sessions, sample agents, memory, context loading, tool execution
+and security enforcement without requiring an external LLM.
 
-## Mind Orchestrator
+It is not a production runtime and should not be presented as a complete AI
+platform.
+
+## Codex Context Orchestrator
 
 The runtime owns `prepareCodexContext` and `reflectAfterTask`, the orchestration
 layer between memory retrieval and Codex prompt context.
@@ -24,10 +29,10 @@ It:
 CLI:
 
 ```bash
-lmti mind context "fix dashboard Agent loi 403"
-lmti mind explain "deploy production"
+lmti mind context "fix packing label bug"
+lmti mind explain "fix permission routing"
 lmti mind reflect --task "implement short memory" --summary "Added TTL notes and promotion flow"
-lmti mind debug "write ERP packing workflow prompt"
+lmti mind debug "write sample packing workflow prompt"
 ```
 
 All output remains privacy-gated and redacted before it reaches terminal or
@@ -65,7 +70,7 @@ summaries are redacted before persistence and before HTML/API output.
 Typical flow:
 
 ```bash
-lmti actions start --task "fix dashboard Agent 403"
+lmti actions start --task "fix permission routing"
 lmti actions log --session-id <id> --type file_modified --file src/auth/middleware.ts --diff-summary "Adjusted role guard"
 lmti actions command --session-id <id> --command "npm test" --exit-code 0 --output-summary "tests passed"
 lmti actions decision --session-id <id> --decision "Keep least privilege" --related-files src/auth/middleware.ts

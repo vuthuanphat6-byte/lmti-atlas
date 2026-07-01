@@ -6,7 +6,7 @@ const amf: AmfDocument = {
   version: "0.0.1",
   generatedAt: "2026-06-28T00:00:00.000Z",
   project: {
-    name: "NOIR ERP",
+    name: "Sample Project",
     root: "/project",
     compiledAt: "2026-06-28T00:00:00.000Z",
     atlasVersion: "0.0.0",
@@ -98,7 +98,7 @@ const amf: AmfDocument = {
     {
       id: "HISTORY-0001",
       kind: "compile",
-      summary: "NOIR ERP compiled from 1 observed file.",
+      summary: "Sample Project compiled from 1 observed file.",
       confidence: "high",
       privacy: "internal"
     }
@@ -129,7 +129,7 @@ describe("Mind Kernel", () => {
     const loaded = loadAmf(JSON.stringify(amf));
     const stats = inspectAmf(loaded);
 
-    expect(stats.project).toBe("NOIR ERP");
+    expect(stats.project).toBe("Sample Project");
     expect(stats.api).toBe(1);
     expect(stats.database).toBe(1);
     expect(stats.architecture).toBe(1);
@@ -157,7 +157,7 @@ describe("Mind Kernel", () => {
             kind: "system_note",
             title: "Secret packing credential",
             content: "Do not expose this secret.",
-            projectId: "NOIR ERP",
+            projectId: "Sample Project",
             sourceRefs: [],
             tags: ["packing"],
             importance: 1,
@@ -198,7 +198,7 @@ describe("Mind Kernel", () => {
           sizeBytes: 100,
           lines: 5,
           hash: "agent",
-          summary: "Dashboard Agent error and debug handling.",
+          summary: "Dashboard agent error and debug handling.",
           privacy: "internal",
           riskFlags: []
         },
@@ -217,8 +217,8 @@ describe("Mind Kernel", () => {
       ]
     };
 
-    const intent = inferIntent("dashboard Agent lỗi");
-    const context = buildContextPack(dashboardAmf, "dashboard Agent lỗi", { inferredIntent: intent });
+    const intent = inferIntent("dashboard agent error");
+    const context = buildContextPack(dashboardAmf, "dashboard agent error", { inferredIntent: intent });
 
     expect(intent.primaryIntent).toBe("dashboard");
     expect(intent.secondaryIntents).toContain("bugfix");

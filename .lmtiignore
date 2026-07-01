@@ -1,0 +1,82 @@
+# LMTI source-boundary rules.
+# Memory is advisory context; source code and command output remain the verification source.
+
+# Dependencies and build artifacts
+node_modules/
+.pnpm-store/
+.next/
+.turbo/
+.cache/
+dist/
+build/
+out/
+coverage/
+*.tsbuildinfo
+
+# Local/generated project copies
+atlas-publish-repo/
+
+# Runtime data and logs
+.git/
+.atlas/
+.lmti/cache/
+.lmti/logs/
+.lmti/events/
+cache/
+logs/
+tmp/
+temp/
+*.log
+
+# WordPress and legacy website noise
+wp-admin/
+wp-includes/
+wp-content/
+public/uploads/
+public/assets/
+
+# Bundled, mapped, archived, or dump-like artifacts
+*.min.js
+*.map
+*.zip
+*.bak
+*.dump
+*.sql
+!prisma/migrations/*.sql
+!prisma/migrations/**/*.sql
+!database/migrations/*.sql
+!database/migrations/**/*.sql
+
+# Binary media/fonts are not useful as raw AMF context
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.avif
+*.ico
+*.mp4
+*.mov
+*.avi
+*.webm
+*.mp3
+*.wav
+*.woff
+*.woff2
+*.ttf
+*.eot
+
+# Secrets remain blocked; keep examples reviewable.
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.token
+.npmrc
+.yarnrc

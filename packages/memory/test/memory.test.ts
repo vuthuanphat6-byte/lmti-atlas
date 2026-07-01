@@ -61,7 +61,7 @@ describe("Memory Core MVP-2", () => {
         kind: "rule",
         title: "Packing label rule",
         content: "A shipping label can only be printed when all products in the same label group are completed.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: ["README.md:1"],
         tags: ["packing", "label"],
         importance: 0.9,
@@ -84,7 +84,7 @@ describe("Memory Core MVP-2", () => {
         kind: "task",
         title: "Fix packing label bug",
         content: "Active task context for packing labels.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["packing"],
         importance: 0.7,
@@ -111,7 +111,7 @@ describe("Memory Core MVP-2", () => {
         kind: "task",
         title: "Temporary context",
         content: "This should expire.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: [],
         importance: 0.4,
@@ -136,7 +136,7 @@ describe("Memory Core MVP-2", () => {
         kind: "risk",
         title: "Payment secret",
         content: "Stripe key: sk_test_123456789",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["payment"],
         importance: 1,
@@ -153,7 +153,7 @@ describe("Memory Core MVP-2", () => {
       includeSecret: true,
       privacyContext: {
         role: "owner",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         purpose: "test",
         includeSecret: true,
         includeRaw: true,
@@ -168,8 +168,8 @@ describe("Memory Core MVP-2", () => {
 
   it("supports runtime short-term and long-term in-memory stores", async () => {
     const store = new InMemoryStore();
-    const shortTerm = new ShortTermMemory(store, { projectId: "NOIR" });
-    const longTerm = new LongTermMemory(store, { projectId: "NOIR" });
+    const shortTerm = new ShortTermMemory(store, { projectId: "sample-project" });
+    const longTerm = new LongTermMemory(store, { projectId: "sample-project" });
 
     await shortTerm.add({
       title: "Active task",
@@ -199,7 +199,7 @@ describe("Memory Core MVP-2", () => {
         kind: "lesson",
         title: "Partner route rule",
         content: "Partner user must route to /partner. /dashboard/summary returning 403 is correct due to least privilege.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["partner", "routing", "permission", "dashboard"],
         importance: 0.9,
@@ -215,7 +215,7 @@ describe("Memory Core MVP-2", () => {
         kind: "lesson",
         title: "Dashboard logo rule",
         content: "Dashboard logo brand image asset must stay aligned.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["dashboard", "logo", "brand", "asset"],
         importance: 0.9,
@@ -242,7 +242,7 @@ describe("Memory Core MVP-2", () => {
         kind: "risk",
         title: "Secret dashboard token",
         content: "token=super-secret-dashboard-value",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["dashboard", "secret"],
         importance: 1,
@@ -278,7 +278,7 @@ describe("Memory Core MVP-2", () => {
         kind: "risk",
         title: "Confidential permission note",
         content: "Confidential permission incident detail.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["permission"],
         importance: 0.8,
@@ -295,7 +295,7 @@ describe("Memory Core MVP-2", () => {
       includeRaw: true,
       privacyContext: {
         role: "owner",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         purpose: "test",
         includeSecret: false,
         includeRaw: true,
@@ -312,7 +312,7 @@ describe("Memory Core MVP-2", () => {
         title: "Partner route fix",
         summary: "Documented partner routing behavior.",
         lesson: "Partner users must route to /partner.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         taskIntent: permissionIntent
       },
       { cwd }
@@ -352,7 +352,7 @@ describe("Memory Core MVP-2", () => {
         kind: "task",
         title: "Partner route debugging lesson",
         content: "Task done lesson: Partner user must route to /partner after permission checks.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: ["task-123"],
         tags: ["partner", "routing", "permission"],
         importance: 0.95,
@@ -367,7 +367,7 @@ describe("Memory Core MVP-2", () => {
         kind: "risk",
         title: "Fake secret fixture",
         content: "token=FAKE_TEST_TOKEN_VALUE",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["secret"],
         importance: 1,
@@ -382,7 +382,7 @@ describe("Memory Core MVP-2", () => {
     expect(result.created).toHaveLength(1);
     expect(result.skipped.some((entry) => entry.reason.includes("secret"))).toBe(true);
     expect((await listMemory("long_term", { cwd })).some((record) => record.title.includes("Partner route"))).toBe(true);
-    expect((await listMemory("short_term", { cwd, privacyContext: { role: "owner", projectId: "NOIR ERP", purpose: "test", includeSecret: true, includeRaw: true, command: "memory list", timestamp: "2026-06-29T00:00:00.000Z" } })).some((record) => record.title.includes("Fake secret"))).toBe(true);
+    expect((await listMemory("short_term", { cwd, privacyContext: { role: "owner", projectId: "Sample Project", purpose: "test", includeSecret: true, includeRaw: true, command: "memory list", timestamp: "2026-06-29T00:00:00.000Z" } })).some((record) => record.title.includes("Fake secret"))).toBe(true);
   });
 
   it("decays old weak memory without over-decaying durable rules", async () => {
@@ -394,7 +394,7 @@ describe("Memory Core MVP-2", () => {
         kind: "system_note",
         title: "Temporary UI note",
         content: "A low confidence note that should fade.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["ui"],
         importance: 0.2,
@@ -412,7 +412,7 @@ describe("Memory Core MVP-2", () => {
         kind: "permission",
         title: "Partner permission invariant",
         content: "Partner users must not gain admin dashboard access.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["partner", "permission"],
         importance: 1,
@@ -426,7 +426,7 @@ describe("Memory Core MVP-2", () => {
     );
 
     const report = await decayMemoryLifecycle({ cwd, now: new Date("2026-06-01T00:00:00.000Z") });
-    const records = await listMemory("long_term", { cwd, privacyContext: { role: "owner", projectId: "NOIR ERP", purpose: "test", includeSecret: false, includeRaw: true, command: "memory list", timestamp: "2026-06-01T00:00:00.000Z" } });
+    const records = await listMemory("long_term", { cwd, privacyContext: { role: "owner", projectId: "Sample Project", purpose: "test", includeSecret: false, includeRaw: true, command: "memory list", timestamp: "2026-06-01T00:00:00.000Z" } });
     const weakAfter = records.find((record) => record.id === weak.id);
     const durableAfter = records.find((record) => record.id === durable.id);
 
@@ -444,7 +444,7 @@ describe("Memory Core MVP-2", () => {
         kind: "lesson",
         title: "Permission debugging lesson",
         content: "Use least privilege when debugging partner permissions.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["permission"],
         importance: 0.8,
@@ -471,7 +471,7 @@ describe("Memory Core MVP-2", () => {
         kind: "route",
         title: "Partner route rule",
         content: "Partner user must route to /partner.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["partner", "routing"],
         importance: 0.9,
@@ -486,7 +486,7 @@ describe("Memory Core MVP-2", () => {
         kind: "route",
         title: "Partner route rule v2",
         content: "Partner user now routes to /partner-v2 instead of /partner.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["partner", "routing"],
         importance: 1,
@@ -513,7 +513,7 @@ describe("Memory Core MVP-2", () => {
         kind: "route",
         title: "Partner route",
         content: "Partner traffic routes through /partner.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["partner", "routing", "permission"],
         importance: 0.9,
@@ -528,7 +528,7 @@ describe("Memory Core MVP-2", () => {
         kind: "permission",
         title: "Partner permission",
         content: "Partner role has least-privilege dashboard access.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["partner", "permission", "routing"],
         importance: 0.9,
@@ -552,7 +552,7 @@ describe("Memory Core MVP-2", () => {
         kind: "permission",
         title: "Partner permission rule",
         content: "Partner user must route to /partner.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["partner", "permission"],
         importance: 0.9,
@@ -567,7 +567,7 @@ describe("Memory Core MVP-2", () => {
         kind: "risk",
         title: "Secret fixture",
         content: "token=FAKE_TEST_TOKEN_VALUE",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["partner", "permission"],
         importance: 1,
@@ -593,7 +593,7 @@ describe("Memory Core MVP-2", () => {
         kind: "lesson",
         title: "Internal route note",
         content: "Internal implementation detail that external models must not receive raw.",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         sourceRefs: [],
         tags: ["routing"],
         importance: 0.8,
@@ -610,7 +610,7 @@ describe("Memory Core MVP-2", () => {
       includeRaw: true,
       privacyContext: {
         role: "external_model",
-        projectId: "NOIR ERP",
+        projectId: "Sample Project",
         purpose: "test",
         includeSecret: false,
         includeRaw: true,
@@ -638,9 +638,25 @@ describe("Project Operating Memory SQLite Library Layer", () => {
       { cwd }
     );
     const stats = await getProjectMemoryStats({ cwd });
+    const updated = await updateProjectMemory(memory.id, { content: "ERP order packing workflow must verify destination and carrier before shipping." }, { cwd });
+    const sqlite = await import("node:sqlite");
+    const db = new sqlite.DatabaseSync(storage.dbPath);
+    const migrations = db.prepare("SELECT version, name FROM memory_migrations ORDER BY version").all() as Array<{ version: number; name: string }>;
+    const storedHash = db.prepare("SELECT content_hash FROM memory_items WHERE id = ?").get(memory.id) as { content_hash: string };
+    db.close();
 
     expect(storage.dbPath.endsWith("project-memory.sqlite")).toBe(true);
+    expect(storage.schemaVersion).toBe(3);
     expect(memory.zone).toBe("workflow");
+    expect(memory.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(updated.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(updated.contentHash).not.toBe(memory.contentHash);
+    expect(storedHash.content_hash).toBe(updated.contentHash);
+    expect(migrations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ version: 3, name: "memory_content_hashes" })
+      ])
+    );
     expect(stats.total).toBe(1);
     expect(stats.byZone.workflow).toBe(1);
   });

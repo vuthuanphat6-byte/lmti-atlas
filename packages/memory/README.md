@@ -47,6 +47,8 @@ require a Node runtime that provides `node:sqlite` (tested on Node 24).
 It adds:
 
 * FTS5 full-text search with BM25 ranking.
+* Schema-versioned SQLite migrations. Version 3 adds `content_hash` for
+  tamper/staleness checks without storing raw secret material.
 * Library zones: `architecture`, `codebase`, `workflow`, `deployment`,
   `security`, `decision`, `lesson`, `incident`, `customer`, `business`,
   `prompting` and `unknown`.

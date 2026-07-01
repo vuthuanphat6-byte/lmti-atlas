@@ -77,8 +77,8 @@ export class CoreRuntime {
   constructor(config: RuntimeConfig = {}) {
     const store: MemoryStore = new InMemoryStore();
     this.config = {
-      projectId: config.projectId ?? "atlas-playground",
-      projectName: config.projectName ?? "ATLAS Playground",
+      projectId: config.projectId ?? "lmti-playground",
+      projectName: config.projectName ?? "LMTI Playground",
       defaultAgentId: config.defaultAgentId ?? "developer"
     };
     this.shortTermMemory = new ShortTermMemory(store, { projectId: this.config.projectId });
@@ -309,7 +309,7 @@ export class CoreRuntime {
       return {
         agentId: agent.id,
         role: agent.role,
-        message: "Đã lưu vào memory."
+        message: "Saved to memory."
       };
     }
 
@@ -319,8 +319,8 @@ export class CoreRuntime {
         agentId: agent.id,
         role: agent.role,
         message: result.ok
-          ? `Security approved.\nĐây là audit log:\n${formatToolData(result.data)}`
-          : `Security blocked. ${result.error ?? "Không thể đọc audit log."}`,
+          ? `Security approved.\nAudit log:\n${formatToolData(result.data)}`
+          : `Security blocked. ${result.error ?? "Could not read audit log."}`,
         toolResults: [result]
       };
     }
@@ -331,8 +331,8 @@ export class CoreRuntime {
         agentId: agent.id,
         role: agent.role,
         message: result.ok
-          ? "[CẢNH BÁO BẢO MẬT] Database delete tool was approved, but this Phase 4 playground tool is a no-op."
-          : `Security blocked. Không đủ quyền admin/database.\nReason: ${result.error ?? "Denied by security policy."}`,
+          ? "[SECURITY WARNING] Database delete tool was approved, but this playground tool is a no-op."
+          : `Security blocked. Missing admin/database permission.\nReason: ${result.error ?? "Denied by security policy."}`,
         toolResults: [result]
       };
     }
@@ -343,7 +343,7 @@ export class CoreRuntime {
       return {
         agentId: agent.id,
         role: agent.role,
-        message: answer ?? "Chưa có memory phù hợp cho câu hỏi này."
+        message: answer ?? "No matching memory found for this question."
       };
     }
 
@@ -398,7 +398,7 @@ function isDatabaseDeleteIntent(message: string): boolean {
   const normalized = normalizeSearchText(message);
   const hasDelete = /\b(xoa|delete|remove|drop|clear)\b/i.test(normalized);
   const hasDatabase = /\b(database|db|co so du lieu)\b/i.test(normalized);
-  const hasWideScope = /\b(toan bo|all|everything|tat ca)\b/i.test(normalized);
+  const hasWideScope = /\b(toan bo|all|everything|entire|whole|tat ca)\b/i.test(normalized);
   return hasDelete && hasDatabase && hasWideScope;
 }
 
@@ -417,7 +417,7 @@ function formatProjectMemoryAnswer(content?: string): string | undefined {
   const trimmed = content.trim().replace(/\s+\.$/, ".");
   const match = /^dự án này là\s+(.+)$/i.exec(trimmed);
   if (match?.[1]) {
-    return ensureSentence(`Dự án ${match[1].trim()}`);
+    return ensureSentence(`Project ${match[1].trim()}`);
   }
 
   return ensureSentence(trimmed.charAt(0).toUpperCase() + trimmed.slice(1));

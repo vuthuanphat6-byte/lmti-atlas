@@ -1,5 +1,8 @@
 # ATLAS Sprint 0: Foundation
 
+> Research archive. This sprint note predates the current Codex-first Local
+> Alpha positioning and should not be read as current capability.
+
 Version: 0.1
 
 Status: Active

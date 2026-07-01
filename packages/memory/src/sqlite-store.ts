@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -50,6 +50,7 @@ export interface ProjectMemoryItem {
   title: string;
   content: string;
   summary: string;
+  contentHash: string;
   source?: string;
   sourceType?: string;
   tags: string[];
@@ -108,6 +109,7 @@ export interface ShortMemoryNote {
   title: string;
   content: string;
   summary: string;
+  contentHash: string;
   source?: string;
   sourceType?: string;
   tags: string[];
@@ -217,6 +219,7 @@ interface ProjectMemoryRow {
   title: string;
   content: string;
   summary: string;
+  content_hash?: string;
   source: string | null;
   source_type: string | null;
   tags: string;
@@ -237,6 +240,7 @@ interface ShortMemoryRow {
   title: string;
   content: string;
   summary: string | null;
+  content_hash?: string;
   source: string | null;
   source_type: string | null;
   tags: string | null;
@@ -255,7 +259,7 @@ interface ShortMemoryRow {
   bm25?: number;
 }
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const DEFAULT_RETRIEVE_LIMIT = 8;
 const DEFAULT_SHORT_MEMORY_LIMIT = 8;
 const SHORT_MEMORY_PROMOTE_SUGGEST_THRESHOLD = 0.75;
@@ -300,6 +304,7 @@ export async function addProjectMemory(input: AddProjectMemoryInput, options: { 
       title: privacy.title,
       content: privacy.content,
       summary: privacy.summary,
+      contentHash: hashMemoryContent(privacy.title, privacy.summary, privacy.content),
       source: input.source,
       sourceType: input.sourceType,
       tags: normalizeLibraryTags([...(input.tags ?? []), ...classification.tags, zone]),
@@ -367,6 +372,7 @@ export async function updateProjectMemory(
       title: privacy.title,
       content: privacy.content,
       summary: privacy.summary,
+      contentHash: hashMemoryContent(privacy.title, privacy.summary, privacy.content),
       source: patch.source ?? existing.source,
       sourceType: patch.sourceType ?? existing.sourceType,
       tags: normalizeLibraryTags([...(patch.tags ?? existing.tags), patch.zone ?? existing.zone]),
@@ -436,6 +442,7 @@ export async function createShortMemoryNote(input: CreateShortMemoryNoteInput, o
       title: privacy.title,
       content: blockedByPrivacy ? "" : privacy.content,
       summary: privacy.summary,
+      contentHash: hashMemoryContent(privacy.title, privacy.summary, blockedByPrivacy ? "" : privacy.content),
       priority,
       privacyLevel: privacy.privacyLevel,
       tags: normalizeLibraryTags([...(input.tags ?? []), ...classification.tags, "short-memory"]),
@@ -1025,6 +1032,7 @@ function applyProjectMemorySchema(db: DatabaseSync): void {
       title TEXT NOT NULL,
       content TEXT NOT NULL,
       summary TEXT NOT NULL,
+      content_hash TEXT NOT NULL DEFAULT '',
       source TEXT,
       source_type TEXT,
       tags TEXT NOT NULL DEFAULT '[]',
@@ -1095,6 +1103,7 @@ function applyProjectMemorySchema(db: DatabaseSync): void {
       title TEXT NOT NULL,
       content TEXT NOT NULL,
       summary TEXT,
+      content_hash TEXT NOT NULL DEFAULT '',
       source TEXT,
       source_type TEXT,
       tags TEXT NOT NULL DEFAULT '[]',
@@ -1163,14 +1172,60 @@ function applyProjectMemorySchema(db: DatabaseSync): void {
     "short_memory_notes_sqlite_fts5",
     new Date().toISOString()
   );
+  applyContentHashMigration(db);
+  db.prepare("INSERT OR IGNORE INTO memory_migrations(version, name, applied_at) VALUES (?, ?, ?)").run(
+    3,
+    "memory_content_hashes",
+    new Date().toISOString()
+  );
+}
+
+function applyContentHashMigration(db: DatabaseSync): void {
+  if (!sqliteColumnExists(db, "memory_items", "content_hash")) {
+    db.exec("ALTER TABLE memory_items ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';");
+  }
+  if (!sqliteColumnExists(db, "short_memory_notes", "content_hash")) {
+    db.exec("ALTER TABLE short_memory_notes ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';");
+  }
+
+  const memoryRows = db.prepare("SELECT id, title, summary, content FROM memory_items WHERE content_hash = ''").all() as Array<{
+    id: string;
+    title: string;
+    summary: string;
+    content: string;
+  }>;
+  for (const row of memoryRows) {
+    db.prepare("UPDATE memory_items SET content_hash = ? WHERE id = ?").run(
+      hashMemoryContent(row.title, row.summary, row.content),
+      row.id
+    );
+  }
+
+  const shortRows = db.prepare("SELECT id, title, summary, content FROM short_memory_notes WHERE content_hash = ''").all() as Array<{
+    id: string;
+    title: string;
+    summary: string | null;
+    content: string;
+  }>;
+  for (const row of shortRows) {
+    db.prepare("UPDATE short_memory_notes SET content_hash = ? WHERE id = ?").run(
+      hashMemoryContent(row.title, row.summary ?? "", row.content),
+      row.id
+    );
+  }
+}
+
+function sqliteColumnExists(db: DatabaseSync, tableName: string, columnName: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === columnName);
 }
 
 function insertProjectMemoryItem(db: DatabaseSync, item: ProjectMemoryItem): void {
   db.prepare(`
     INSERT INTO memory_items (
       id, zone, title, content, summary, source, source_type, tags, privacy_level,
-      confidence, importance, created_at, updated_at, last_accessed_at, expires_at, status, reasons
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      confidence, importance, created_at, updated_at, last_accessed_at, expires_at, status, reasons, content_hash
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(...itemToSqliteValues(item));
 }
 
@@ -1190,7 +1245,8 @@ function updateProjectMemoryItemSync(db: DatabaseSync, item: ProjectMemoryItem):
       updated_at = ?,
       expires_at = ?,
       status = ?,
-      reasons = ?
+      reasons = ?,
+      content_hash = ?
     WHERE id = ?
   `).run(
     item.zone,
@@ -1207,6 +1263,7 @@ function updateProjectMemoryItemSync(db: DatabaseSync, item: ProjectMemoryItem):
     item.expiresAt ?? null,
     item.status,
     JSON.stringify(item.reasons),
+    item.contentHash,
     item.id
   );
 }
@@ -1216,8 +1273,8 @@ function insertShortMemoryNote(db: DatabaseSync, note: ShortMemoryNote): void {
     INSERT INTO short_memory_notes (
       id, title, content, summary, source, source_type, tags, priority, status,
       privacy_level, importance_score, promote_score, promoted_to_long_memory_id,
-      created_at, updated_at, expires_at, last_accessed_at, access_count, reasons
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      created_at, updated_at, expires_at, last_accessed_at, access_count, reasons, content_hash
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     note.id,
     note.title,
@@ -1237,7 +1294,8 @@ function insertShortMemoryNote(db: DatabaseSync, note: ShortMemoryNote): void {
     note.expiresAt,
     note.lastAccessedAt ?? null,
     note.accessCount,
-    JSON.stringify(note.reasons)
+    JSON.stringify(note.reasons),
+    note.contentHash
   );
 }
 
@@ -1480,7 +1538,8 @@ function itemToSqliteValues(item: ProjectMemoryItem): SqliteValue[] {
     item.lastAccessedAt ?? null,
     item.expiresAt ?? null,
     item.status,
-    JSON.stringify(item.reasons)
+    JSON.stringify(item.reasons),
+    item.contentHash
   ];
 }
 
@@ -1491,6 +1550,7 @@ function rowToProjectMemoryItem(row: ProjectMemoryRow): ProjectMemoryItem {
     title: row.title,
     content: row.content,
     summary: row.summary,
+    contentHash: row.content_hash || hashMemoryContent(row.title, row.summary, row.content),
     source: row.source ?? undefined,
     sourceType: row.source_type ?? undefined,
     tags: safeJsonArray(row.tags),
@@ -1512,6 +1572,7 @@ function rowToShortMemoryNote(row: ShortMemoryRow): ShortMemoryNote {
     title: row.title,
     content: row.content,
     summary: row.summary ?? createShortMemorySummary(row.title, row.content),
+    contentHash: row.content_hash || hashMemoryContent(row.title, row.summary ?? "", row.content),
     source: row.source ?? undefined,
     sourceType: row.source_type ?? undefined,
     tags: safeJsonArray(row.tags ?? "[]"),
@@ -1600,6 +1661,12 @@ function buildFtsQuery(query: string): string {
     .filter((token) => /^[a-z0-9_/-]+$/i.test(token))
     .slice(0, 12);
   return tokens.map((token) => `"${token.replace(/"/g, "\"\"")}"`).join(" OR ");
+}
+
+function hashMemoryContent(title: string, summary: string, content: string): string {
+  return createHash("sha256")
+    .update(`${title}\n${summary}\n${content}`, "utf8")
+    .digest("hex");
 }
 
 function safeJsonArray(value: string): string[] {

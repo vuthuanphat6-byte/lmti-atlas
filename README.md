@@ -1,363 +1,335 @@
-# LMTI - Atlas
+# LMTI
 
-LMTI helps AI stop wandering around your project. It compiles project
-understanding into a local mind file so coding agents can work with better
-context and fewer repeated scans.
+**Safe project memory for AI coding agents.**
 
-Everything runs locally. LMTI does not require cloud services, external AI APIs
-or a specific language model.
+LMTI is a local-first project memory and verification layer for AI coding
+agents. It helps agents retrieve the right project context, avoid repeated
+mistakes, respect privacy boundaries, and verify stale knowledge before acting.
 
-## Quick Start
-
-```bash
-npx lmti init
-npx lmti compile
-npx lmti attach codex
-npx lmti context "fix packing label bug"
-```
-
-After `attach codex`, Codex can read `AGENTS.md`, discover the LMTI guidance and
-prefer `.lmti/project.amf.json` plus local Context Packs over repeated full-repo
-scans.
-
-## Repository As Research Room
-
-LMTI is not only source code.
-
-The repository keeps implementation, philosophy, research notes, papers and
-experiments close together:
+Codex is the first workflow this repository is trying to make genuinely useful.
+Other agents are represented through the adapter and preflight contracts, but
+the current product focus is Codex-first local development.
 
 ```text
-README.md
-docs/
-research/
-philosophy/
-papers/
-experiments/
-packages/
+AI agents are fast, but they forget.
+LMTI gives them safe, verified project memory.
 ```
 
-Start with `philosophy/` if you want to understand why the project exists.
+Status: **Local Alpha**
 
-## Current Research Hypothesis
+Package distribution is not finalized yet. For now, run LMTI from source.
 
-LMTI tests whether a compiled project mind can reduce unnecessary project
-exploration for AI agents.
+```bash
+corepack pnpm install
+corepack pnpm build
+node packages/cli/dist/index.js init
+node packages/cli/dist/index.js compile
+node packages/cli/dist/index.js preflight "fix the actions CLI foreign key flake" --role developer --model-target external_model
+```
 
-The current implementation demonstrates a local estimate: it compares a naive
-keyword-search exploration path with the files selected from compiled AMF. It
-does not claim real token savings, model-quality gains or production-grade
-Artificial Mind behavior.
+## The Problem
 
-## Project Operating Memory
+AI coding agents are useful, but real projects have memory and verification
+problems that a single prompt cannot solve well:
 
-LMTI is not a file dump.
-LMTI is project operating memory.
+- They forget previous decisions, bugs, routes, deploy steps, and permission rules.
+- They may read too much irrelevant context and miss the files that matter.
+- They can trust stale notes, old assumptions, or legacy code paths.
+- They repeat mistakes because lessons are not captured as reusable project knowledge.
+- They may accidentally carry secrets or private project data into a model prompt.
+- They often need a clear verification plan before touching security-sensitive code.
 
-It should remember:
+LMTI does not replace AI agents. It makes existing agents work better inside
+real projects.
 
-* rules
-* decisions
-* bugs
-* lessons
-* routes
-* permissions
-* deployment notes
-* debugging experience
+## What LMTI Does
 
-It should NOT blindly remember:
+### Project Atlas
 
-* raw chat history
-* every file
-* every prompt
-* every random note
+`lmti compile` builds `.lmti/project.amf.json`, a structured local map of the
+repository. It records modules, files, symbols, dependencies, summaries,
+ignored zones, risks, and unresolved questions without executing target code.
 
-## Long-Term Memory Engine
+### Memory Core
 
-Long-term memory now has a lifecycle:
+LMTI stores deliberate project memory: decisions, lessons, rules, bugs,
+workflow notes, deployment notes, and security constraints. It is not raw chat
+history by default.
+
+### Context Router
+
+`lmti context "<task>"` infers task intent and builds a Context Pack from AMF
+and policy-safe memory. The goal is to retrieve useful context without turning
+the whole repository into one giant prompt.
+
+### Privacy Gate
+
+Memory and context output pass through privacy filtering and egress scanning.
+Secret-like values are redacted or blocked before CLI output, preflight output,
+or adapter delivery.
+
+### Preflight
+
+`lmti preflight "<task>"` is the current MVP hot path. It reads memory metadata
+first, hard-blocks unsafe memory before content load, ranks policy-safe memory,
+builds a minimal/hybrid context package, scans egress, and checks adapter
+sandbox rules.
+
+### Verification Metadata
+
+LMTI treats memory as guidance, not truth. The current preflight path returns
+risk signals, predicted failures, executive constraints, policy decisions, and
+blocked-memory summaries. The per-context-item verification contract is being
+standardized so agents can see what must be checked before acting.
+
+### Lesson Capture
+
+After a task, `lmti task done` and `lmti memory lesson` capture reusable
+project knowledge intentionally. Lessons should describe durable behavior, not
+paste raw private chat.
+
+### Adapter Layer
+
+The current adapter layer is a preflight contract plus sandbox checks for
+policy-safe context output. Codex is the primary workflow today. Other agent
+names are compatibility targets, not supported adapter runtimes yet.
+
+### Doctor
+
+`lmti doctor` diagnoses local `.lmti` state, AMF noise, ignore rules, legacy
+Atlas storage, and security posture. `lmti doctor --security` focuses on
+security and privacy diagnostics.
+
+### Codex Action View
+
+The local Action View can record Codex sessions, file events, commands,
+decisions, memory usage, reflections, risk analysis, and replay data in local
+SQLite. It stores summaries and metadata, not raw file snapshots.
+
+## Why It Is Different
+
+LMTI is not just a context file. Context files are static and become stale.
+
+LMTI is not just vector search. Search can find nearby text, but it does not
+decide what is safe, current, or relevant to a specific task.
+
+LMTI is not just long-term memory. Memory without privacy, routing,
+verification, and lesson capture can become another source of stale context.
+
+The useful combination is:
 
 ```text
-Input Event
-  -> Encode
-  -> Short-Term Buffer
-  -> Consolidate
-  -> Long-Term Memory
-  -> Retrieve
-  -> Reinforce / Decay
+Memory + Intent Routing + Privacy Gate + Verification + Lesson Capture
 ```
 
-Each long-term memory can carry activation metadata such as `memoryStrength`,
-`baseActivation`, `retrievalCount`, `decayRate`, `stability`, `priorityScore`,
-`contextCues`, associations, supersession status and review scheduling.
+## Quickstart From Source
 
-Retrieval is no longer only keyword search. LMTI combines lexical match, task
-intent, context cues, association weight, priority, recency/decay and privacy
-penalties. `secret` and `do_not_prompt` memories are excluded from normal
-context, confidential memory is summarized, and superseded or archived memory is
-kept as history instead of source truth.
+Requirements:
 
-Useful commands:
+- Node.js 20 or newer.
+- pnpm through Corepack.
+- For the SQLite-backed project memory commands, use a Node runtime that
+  provides `node:sqlite`; this path is currently tested on Node 24.
+
+Install, build, and verify:
 
 ```bash
-node packages/cli/dist/index.js memory init
-node packages/cli/dist/index.js memory add --title "Partner dashboard 403" --content "Partner user must route to /partner. Dashboard 403 is correct under least privilege."
-node packages/cli/dist/index.js memory search "dashboard 403 partner"
-node packages/cli/dist/index.js memory retrieve "fix partner dashboard permission"
-node packages/cli/dist/index.js memory lesson --task "Partner route fix" --lesson "Partner user must route through /partner."
-node packages/cli/dist/index.js memory stats
-node packages/cli/dist/index.js memory privacy-check
-node packages/cli/dist/index.js memory consolidate
-node packages/cli/dist/index.js memory decay
-node packages/cli/dist/index.js memory reinforce <id> --success true
-node packages/cli/dist/index.js memory reinforce <id> --success false
-node packages/cli/dist/index.js memory review
-node packages/cli/dist/index.js memory associations <id>
-node packages/cli/dist/index.js memory explain "partner permission route"
+corepack pnpm install
+corepack pnpm build
+corepack pnpm test
 ```
 
-After a task reveals reusable project knowledge, record a lesson deliberately:
+Initialize LMTI in a project and build the Project Atlas:
 
 ```bash
-node packages/cli/dist/index.js task done --title "..." --summary "..." --lesson "..."
+node packages/cli/dist/index.js init
+node packages/cli/dist/index.js compile
+node packages/cli/dist/index.js inspect
 ```
 
-The SQLite Project Operating Memory layer stores long-term project knowledge in
-`.lmti/memory/project-memory.sqlite` with FTS5 search and library zones:
-`architecture`, `codebase`, `workflow`, `deployment`, `security`, `decision`,
-`lesson`, `incident`, `customer`, `business`, `prompting` and `unknown`.
-`lmti memory add` without `--scope` writes to this SQLite layer. The older JSON
-memory commands remain available with `--scope ... --legacy`.
-
-Privacy gates run before writes and before prompt retrieval. Secret-like content
-is redacted before storage and marked `secret` or `do_not_prompt`; those records
-are not returned by `memory search` or `memory retrieve`. Internal memory is
-summarized by default in safe retrieval mode.
-
-## Short Memory Notes
-
-Short Memory is the temporary desk-notes layer inside the same SQLite store. It
-is for current-task context, checkpoints, build/test notes and unfinished
-debugging state. Notes have TTL by priority: `low` 6h, `medium` 24h, `high` 3d
-and `critical` 7d. Expired weak notes are cleaned up; only high-value notes are
-promoted into Long Memory after privacy and promotion checks.
+Build task context:
 
 ```bash
-node packages/cli/dist/index.js memory short:add --title "Current checkpoint" --content "Inspect memory retrieval next." --priority medium
-node packages/cli/dist/index.js memory short:retrieve "memory retrieval"
-node packages/cli/dist/index.js memory short:expire
-node packages/cli/dist/index.js memory short:cleanup --dry-run
-node packages/cli/dist/index.js memory short:evaluate <noteId>
-node packages/cli/dist/index.js memory short:promote <noteId> --reason "Durable lesson"
-node packages/cli/dist/index.js memory context "fix partner dashboard permission"
+node packages/cli/dist/index.js context "fix packing label bug"
 ```
 
-`memory context` retrieves Short Memory first for current-task constraints and
-Long Memory second for durable project knowledge. Secret and `do_not_prompt`
-notes are blocked from retrieval and promotion.
-
-## Mind Orchestrator
-
-`@atlas/runtime` now includes a Mind Orchestrator between Memory and Codex. It
-routes task intent, selects memory zones, retrieves Short and Long Memory,
-reranks by practical usefulness, filters noise, detects conflicts, applies a
-context budget and returns a compact Codex context packet.
+Run the policy-safe preflight path:
 
 ```bash
-node packages/cli/dist/index.js mind context "fix dashboard Agent loi 403"
-node packages/cli/dist/index.js mind explain "deploy production"
-node packages/cli/dist/index.js mind reflect --task "implement short memory" --summary "Added TTL notes and promotion flow"
-node packages/cli/dist/index.js mind debug "write ERP packing workflow prompt"
+node packages/cli/dist/index.js preflight "fix partner dashboard permission" --role developer --model-target external_model
+```
+
+Capture a lesson after a task:
+
+```bash
+node packages/cli/dist/index.js task done --title "Partner route fix" --summary "Confirmed partner routing behavior." --lesson "Partner users must route through /partner; do not widen permissions to make /dashboard pass."
 ```
 
 Useful npm aliases:
 
 ```bash
-npm run mind:context -- "fix dashboard Agent loi 403"
-npm run mind:explain -- "deploy production"
-npm run mind:reflect -- --task "implement short memory" --summary "Added TTL notes and promotion flow"
-npm run mind:debug -- "write ERP packing workflow prompt"
-```
-
-Mind context keeps guardrails first, Short Memory for current-task constraints,
-Long Memory for durable project knowledge, and rejected-memory reasons for
-debugging. Secret and `do_not_prompt` memories remain blocked before output.
-
-## Codex Action View
-
-LMTI now has a local Codex Action View for observing AI-agent work. It records
-sessions, timeline actions, file activity, commands, decisions, memory usage,
-reflections, scope warnings, risk analysis and replay data in:
-
-```text
-.lmti/actions/codex-actions.sqlite
-```
-
-CLI:
-
-```bash
-lmti actions start --task "fix dashboard Agent 403"
-lmti actions log --session-id <id> --type file_read --file src/auth/middleware.ts
-lmti actions command --session-id <id> --command "npm test" --exit-code 0
-lmti actions decision --session-id <id> --decision "Keep least privilege" --reason "403 is expected for partner role"
-lmti actions memory --session-id <id> --memory-id <memory-id> --memory-type long --used-in-decision
-lmti actions reflection --session-id <id> --summary "Fixed route safely" --tests-run "npm test"
-lmti actions end --session-id <id> --status completed
-lmti actions list
-lmti actions show <id>
-lmti actions show <id> --html
-lmti actions replay <id>
-lmti actions replay <id> --html
-lmti actions risks
-lmti actions stats
-```
-
-Useful npm aliases:
-
-```bash
-npm run actions:list
-npm run actions:show -- <session-id>
-npm run actions:replay -- <session-id>
-npm run actions:risks
-```
-
-Action View stores summaries and metadata, not raw file content. Command output,
-diff summaries, decisions and HTML renderers are redacted before storage/output.
-Dangerous files and commands are marked high/critical risk, and sessions without
-test/build/lint verification are flagged.
-
-Recommended lifecycle:
-
-1. Start a session as soon as Codex receives a concrete task.
-2. Log file events for files read or changed, with short diff summaries only.
-3. Log build/test/lint commands with exit code and compact output summaries.
-4. Log important decisions and the memory ids that influenced them.
-5. Save a reflection before ending the session so lessons, tests and residual
-   risks remain auditable.
-
-Security boundary: Action View is local observability, not a secret vault. It
-redacts secret-like values and avoids raw file snapshots, but the SQLite file is
-currently plaintext on disk. Do not intentionally store credentials or full
-private documents in action summaries.
-
-## Universal Framework Support
-
-LMTI includes a framework-agnostic support layer in `@atlas/frameworks`. It
-detects the active stack, package manager, monorepo apps/packages, framework
-risk zones and verification plan without making the core depend on Next.js,
-Laravel, Django or any single runtime.
-
-Supported detector/adapters include:
-
-```text
-nextjs, react-vite, nestjs, express, laravel, django, fastapi,
-wordpress, dotnet, spring-boot, rails, flutter, generic
-```
-
-CLI:
-
-```bash
-lmti framework detect
-lmti framework detect --json
-lmti framework detect --html
-lmti framework list
-lmti framework info
-lmti framework commands
-lmti framework risk-zones
-lmti framework verify-plan --task "fix login middleware" --files middleware.ts
-lmti framework monorepo-map
-```
-
-Useful npm aliases:
-
-```bash
+npm run lmti:help
+npm run lmti:doctor
+npm run lmti:compile
+npm run memory:stats
 npm run framework:detect
-npm run framework:commands
-npm run framework:verify -- --task "fix auth" --files middleware.ts
 ```
 
-The detector creates `.lmti/frameworks.yml` when run through the CLI. It reads
-metadata only: filenames, lockfiles and manifests needed for detection. It does
-not read raw `.env`, `wp-config.php`, `appsettings.json`, Laravel APP_KEY,
-Django SECRET_KEY or database URLs. Framework HTML views are rendered by safe
-internal renderers for CLI/local UI integration.
+If the CLI package is installed or linked locally, the equivalent `lmti ...`
+commands work. This README uses direct `node packages/cli/dist/index.js ...`
+commands because public package distribution is not finalized.
 
-## Cognitive Orchestrator
+## Using LMTI With Codex
 
-`@atlas/cognition` adds the deterministic orchestration layer above memory,
-kernel, privacy and runtime. It does not claim consciousness. It estimates
-context integration, tracks prediction error, arbitrates global workspace focus
-and broadcasts only policy-safe summaries or metadata.
+Codex is the first agent workflow this repository prioritizes.
+
+Recommended local flow:
+
+1. Initialize LMTI in the repository.
+2. Compile the Project Atlas.
+3. Attach LMTI guidance to Codex.
+4. Run preflight for the current task.
+5. Let Codex inspect source, tests, and command output before editing.
+6. Capture durable lessons after the task.
+7. Run doctor/preflight before future high-risk tasks.
+
+Commands:
 
 ```bash
-node packages/cli/dist/index.js cognition run "dashboard Agent 403 permission"
-node packages/cli/dist/index.js cognition explain "dashboard Agent 403 permission"
-node packages/cli/dist/index.js cognition state
+node packages/cli/dist/index.js init
+node packages/cli/dist/index.js compile
+node packages/cli/dist/index.js attach codex
+node packages/cli/dist/index.js preflight "refactor adapter preflight logic out of the CLI" --role developer --model-target external_model
 ```
 
-The cognition package consumes already-selected context candidates. It does not
-read raw secret memory, call external AI APIs or duplicate kernel Context Pack
-scoring.
+Example preflight shape:
 
-## World Model
+```json
+{
+  "inferredIntent": {
+    "keywords": ["adapter", "preflight", "cli"]
+  },
+  "selectedMemories": [
+    {
+      "mode": "summary",
+      "score": 0.82,
+      "why": ["task intent matched adapter/preflight memory"]
+    }
+  ],
+  "blockedMemories": [
+    {
+      "reason": "secret",
+      "safeSummary": "A blocked memory was withheld by policy."
+    }
+  ],
+  "executiveConstraints": [
+    "Do not inject or print secrets.",
+    "Verify memory against source before changing behavior."
+  ],
+  "predictedFailures": [
+    "stale memory may conflict with current source"
+  ]
+}
+```
 
-`@atlas/world-model` adds a Reality Boundary between the internal project mind
-and external observations such as user input, source evidence, test output, CLI
-output and tool/runtime signals.
+Codex should treat that output as guidance. Source code, tests, build output,
+runtime behavior, and explicit user instruction remain the verification source.
 
-It treats memory as prior belief, not reality. Source code, tests, tool output
-and explicit user instruction are observations. When memory conflicts with an
-observation, the world model lowers confidence, reports prediction error and
-proposes the next safe action. It never executes tools directly.
+Optional Action View flow:
 
 ```bash
-node packages/cli/dist/index.js world check "fix partner dashboard 403"
-node packages/cli/dist/index.js world cost "fix partner dashboard 403"
-node packages/cli/dist/index.js world align "fix partner dashboard 403"
-node packages/cli/dist/index.js world observe "current test output summary"
+node packages/cli/dist/index.js actions start --task "fix permission routing"
+node packages/cli/dist/index.js actions command --session-id <id> --command "npm test" --exit-code 0
+node packages/cli/dist/index.js actions decision --session-id <id> --decision "Keep least privilege" --reason "403 is expected for partner role"
+node packages/cli/dist/index.js actions reflection --session-id <id> --summary "Fixed route safely" --tests-run "npm test"
+node packages/cli/dist/index.js actions end --session-id <id> --status completed
 ```
 
-All sensory input passes through a Markov Blanket. Secret-like content is
-redacted and marked `do_not_prompt` before it can enter cognition or context.
+## Core Concepts
 
-## Neural Architecture Boundaries
+### Memory Item
 
-ATLAS now keeps one source of truth per cognitive responsibility:
+A durable or temporary project note with title, content or summary, tags,
+source references, sensitivity, prompt policy, lifecycle status, and retrieval
+metadata. Good memory records confirmed project behavior; it should not store
+raw secrets or unreviewed chat dumps.
+
+### Context Item
+
+A selected piece of task-relevant information prepared for an agent. Context
+should be small, policy-safe, and labeled with why it was selected and whether
+it needs verification.
+
+### Project Atlas
+
+The compiled project map stored in `.lmti/project.amf.json`. It is generated by
+`lmti compile` and used by `lmti context`, `lmti inspect`, and preflight flows.
+
+### Intent
+
+The inferred task category, keywords, affected modules, and risk shape. Intent
+helps LMTI route memory and Atlas context to the current agent task.
+
+### Privacy Level
+
+LMTI uses privacy metadata to decide whether memory can enter agent context.
+Current code-level sensitivities are `public`, `internal`, `confidential`, and
+`secret`. In product language, `confidential` is the sensitive/private tier.
+`do_not_prompt` is a prompt policy that blocks memory from normal context.
+
+### Verification Metadata
+
+Metadata that tells an agent whether a context item must be checked again and
+how to check it. This is especially important for old lessons, deploy notes,
+permissions, database assumptions, and security-sensitive behavior.
+
+### Lesson
+
+A reusable rule learned from a completed task. A good lesson is short,
+source-grounded, and useful for preventing a future mistake.
+
+### Adapter
+
+A policy-controlled delivery path for agent context. Adapter output is treated
+as an untrusted sink unless it passes the sandbox and privacy profile.
+
+### Doctor
+
+A local diagnostic command for storage, AMF health, ignore rules, legacy files,
+and security posture.
+
+### Preflight
+
+The policy-safe context package builder. It exists to answer: "What context may
+this agent safely receive for this task, and what must be verified?"
+
+## Privacy And Safety
+
+LMTI is local-first. It does not require a cloud service, external AI API, RAG
+service, vector database, or hosted memory backend.
+
+Important safety rules:
+
+- `.lmti/` is local runtime state and should stay out of git.
+- Do not store raw API keys, passwords, private keys, tokens, certificates, or
+  database URLs as memory.
+- Privacy gates run before memory enters context, preflight, adapter output, or
+  safe CLI rendering.
+- Secret-like values are redacted or blocked before output.
+- If LMTI is unsure, the safe default is to keep memory out of the prompt.
+- Memory is guidance, not truth; agents must verify source, tests, builds, and
+  runtime behavior before acting.
+
+Practical privacy vocabulary:
 
 ```text
-@atlas/types
-  -> shared AMF, Context Pack and memory/privacy contracts
-@atlas/kernel
-  -> intent inference and Context Pack scoring
-@atlas/memory
-  -> memory lifecycle, retrieval, consolidation and privacy-safe summaries
-@atlas/privacy
-  -> access policy, redaction, hard gates and egress scans
-@atlas/cognition
-  -> cognitive focus, global workspace and Context Pack -> cognition mapping
-@atlas/world-model
-  -> observations, beliefs, reality checks and Context Pack -> world mapping
-@atlas/runtime
-  -> orchestrates memory, kernel, cognition, tools and security
-@atlas/cli
-  -> parses commands and prints package results
+public       Safe to show when relevant.
+internal     Local project knowledge; external sinks receive summaries by default.
+sensitive    Product-language tier for private/confidential project knowledge.
+confidential Current code-level name for sensitive/private project memory.
+secret       Blocked from normal context and adapter output.
+do_not_prompt Prompt policy that prevents memory from entering normal prompts.
 ```
-
-`@atlas/runtime` must not own Context Pack scoring. It re-exports the old
-`buildContextPack`, `inspectAmf` and `formatInspection` APIs from
-`@atlas/kernel` for compatibility. CLI commands remain stable while cognition
-and world-model conversion logic lives in their domain packages.
-
-## Security Model
-
-LMTI treats project knowledge as sensitive by default.
-
-- Local-first: no external AI API is required.
-- No raw secret export: CLI and adapter output pass through redaction/egress scanning.
-- Privacy-gated memory: `secret` and `do_not_prompt` memory cannot enter normal context.
-- Policy-safe adapter output: adapters default to `external_model`, no raw secret, no raw confidential.
-- Tool execution through `SecurityGuard`: dangerous permissions are denied by default.
-- Target projects are untrusted input: compile reads files only, skips ignored secret files and symlinks, and does not execute target code.
-- Memory is prior belief, not verified truth: source/test/tool/user evidence wins in security-sensitive flows.
 
 Security docs:
 
@@ -369,501 +341,233 @@ docs/security/ADAPTER_SECURITY.md
 docs/security/SECURITY_CHECKLIST.md
 ```
 
-## Current Scope
+## Verification Contract
 
-LMTI - Atlas is currently a local PoC for compiling project knowledge,
-assembling Context Packs and running the first exploration-reduction
-experiment.
+Target agent-facing context items should carry this contract:
 
-Current status: minimal compiler, Mind Kernel, CLI, structured local memory,
-cognitive privacy helpers and an experimental runtime playground.
-
-It still does not require RAG, a vector database, cloud services or an external
-LLM API key.
-
-It builds one foundation:
-
-```text
-project
-  ->
-lmti compile
-  ->
-.lmti/project.amf.json
-  ->
-Mind Kernel
-  ->
-Context Pack
+```ts
+{
+  verify_required: boolean;
+  suggested_verification: string[];
+  last_verified_at: string | null;
+}
 ```
 
-## Sprint 1 Mind Kernel
+- `verify_required`: whether the item must be checked before action.
+- `suggested_verification`: concrete ways to verify it, such as reading source,
+  running focused tests, checking schema, or reviewing framework routes.
+- `last_verified_at`: the last real verification timestamp. Do not fake this.
 
-`@atlas/kernel` is the smallest independent Mind Kernel. It does not parse
-repositories or know programming languages. It only loads AMF, validates the
-minimum structure, inspects Project DNA and produces Context Packs from
-cognitive structures.
+Example:
 
-Sprint 1 path:
-
-```text
-Repository
-  ->
-Mind Compiler
-  ->
-Artificial Mind Format (AMF)
-  ->
-Mind Kernel
-  ->
-Context Pack
+```json
+{
+  "content": "The actions CLI previously had a foreign key flake in full test.",
+  "source": "lesson_memory",
+  "verify_required": true,
+  "suggested_verification": ["run_tests", "inspect_database_schema"],
+  "last_verified_at": null
+}
 ```
 
-## First Experiment
+Current implementation note: exact `verify_required`,
+`suggested_verification`, and `last_verified_at` fields are not yet first-class
+on every context item. Today, preflight exposes related signals through
+`riskSignals`, `predictedFailures`, `executiveConstraints`, `policyDecisionIds`,
+blocked-memory summaries, framework verification plans, and world-model checks.
 
-LMTI does not try to make the model bigger. LMTI tries to reduce unnecessary
-thinking by giving agents a compiled project mind.
-
-Without LMTI:
-
-```text
-Agent searches many files.
-```
-
-With LMTI:
+## Architecture Overview
 
 ```text
-Agent loads .lmti/project.amf.json and focuses only on relevant modules/files.
+AI Agent Task
+     |
+     v
+Intent Classifier
+     |
+     v
+Context Router
+     |
+     v
+Memory Core + Project Atlas
+     |
+     v
+Privacy Gate
+     |
+     v
+Verification Metadata
+     |
+     v
+Agent Adapter
+     |
+     v
+AI Agent
+     |
+     v
+Lesson Capture
 ```
 
-Run the first local experiment:
-
-```bash
-node packages/cli/dist/index.js experiment thinking "fix packing label bug"
-```
-
-The report is saved to:
+Package boundaries:
 
 ```text
-.lmti/experiments/EXP-0001-thinking.json
+packages/types       Shared AMF, memory, privacy, and preflight contracts.
+packages/compiler    Project Atlas / AMF compiler.
+packages/kernel      Intent inference and AMF Context Pack scoring.
+packages/memory      Memory lifecycle, SQLite project memory, retrieval, lessons.
+packages/privacy     Redaction, access policy, hard gates, egress scan, audit.
+packages/frameworks  Framework detection, commands, risk zones, verify plans.
+packages/runtime     Codex context preparation, Action View, runtime orchestration.
+packages/security    Tool permission guard.
+packages/cli         Command adapter for local workflows.
 ```
 
 ## What Works Now
 
-* `lmti init` creates local `.lmti` state.
-* `lmti compile` creates `.lmti/project.amf.json`.
-* `lmti context "<task>"` returns a local JSON Context Pack.
-* `lmti experiment thinking "<task>"` saves a local exploration estimate report.
-* `lmti attach codex` updates `AGENTS.md` without deleting existing content.
-* `lmti remember` stores deliberate project lessons, rules and decisions.
-* `lmti task done` records task completion events and optional lessons.
+- `lmti init` creates local `.lmti` state.
+- `lmti compile` creates `.lmti/project.amf.json`.
+- `lmti inspect` prints AMF/project stats.
+- `lmti context "<task>"` builds a task Context Pack.
+- `lmti preflight "<task>"` builds a policy-safe MVP context package.
+- `lmti attach codex` updates `AGENTS.md` with LMTI guidance.
+- `lmti memory ...` manages project memory, short memory, retrieval, lessons,
+  privacy checks, consolidation, review, decay, and reinforcement.
+- `lmti task done` records task completion events and optional lessons.
+- `lmti doctor` diagnoses storage, AMF, ignore rules, migration, and security.
+- `lmti framework ...` detects frameworks, commands, risk zones, and verify plans.
+- `lmti actions ...` records and replays local Codex/AI-agent action sessions.
 
-## Intentionally Not Implemented
+## Current Status
 
-* No external AI API integration.
-* No cloud service.
-* No vector database.
-* No automatic code execution from target projects.
-* No claim that LMTI is already a complete Artificial Mind.
+Status: **Local Alpha**
+
+LMTI is currently focused on local workflows for coding agents, especially
+Codex. The foundation includes Project Atlas compilation, memory, privacy
+gates, context routing, preflight, lesson capture, doctor diagnostics,
+framework detection, Action View, and adapter interfaces.
+
+It is not production-ready yet. Public package distribution, team/cloud
+features, production adapter runtime, dashboard UI, and enterprise/self-hosted
+options are not finalized.
+
+The current MVP question is narrower and security-focused:
+
+```text
+Can LMTI produce a policy-safe context package without leaking blocked memory?
+```
 
 ## Known Limitations
 
-* Compiler parsing is heuristic and focused on JS/TS, docs and database files.
-* Experiment metrics are estimates, not measured agent traces.
-* The runtime/playground packages are experimental and not required for the PoC
-  CLI flow.
-* Secret detection is pattern-based and should be treated as a safety net, not a
-  substitute for secret scanning.
+- The compiler is heuristic and strongest around JS/TS projects, docs, and
+  common metadata files.
+- AMF and memory are local artifacts; they should be refreshed and verified
+  against source evidence.
+- The exact per-context-item verification contract is still being standardized.
+- Project memory SQLite uses `node:sqlite`; this path is currently tested on
+  Node 24.
+- Adapter support is contract-first. Codex is the current priority workflow.
+- Action View stores local plaintext SQLite metadata. It is not a secret vault.
+- Secret detection is a safety net, not a replacement for dedicated secret scanning.
 
-## Next Research Steps
+## Roadmap
 
-* Compare estimated exploration against real agent traces.
-* Improve AMF summaries without storing raw repositories.
-* Add benchmarks for false-positive and false-negative Context Pack selection.
-* Keep privacy and local-first operation as hard constraints.
+### Stage 1 - Local Alpha
 
-## Commands
+- Stable init, compile, context, preflight, doctor, and Codex workflow.
+- Privacy gate and egress tests for known secret patterns.
+- Lesson capture that avoids raw private chat.
+- First-class verification metadata on returned context items.
+- Full test stability and clearer quickstart docs.
+
+### Stage 2 - Agent Beta
+
+- Reusable SDK/API around the preflight and adapter path.
+- Stronger adapter package boundary outside the CLI.
+- Local dashboard or terminal UI for memory, actions, and risk review.
+- More agent workflows beyond Codex.
+- Context explanation and benchmark cases based on real agent traces.
+
+### Stage 3 - Public Product
+
+- Package release and installation docs.
+- Examples and docs site.
+- Security policy and disclosure process.
+- Team memory and CI integration.
+- Enterprise/self-hosted options if the local product proves reliable first.
+
+Long-term vision: LMTI may evolve into a broader operating memory layer for AI
+systems, but the current product focus is AI coding agents.
+
+See [ROADMAP.md](ROADMAP.md) for the open-source roadmap and current scope.
+
+## Project Docs
+
+- [CONTRIBUTING.md](CONTRIBUTING.md): local setup, tests, PR expectations, and secret hygiene.
+- [SECURITY.md](SECURITY.md): vulnerability reporting and security scope.
+- [CHANGELOG.md](CHANGELOG.md): unreleased changes and release notes.
+- [docs/architecture.md](docs/architecture.md): current local architecture overview.
+- [docs/privacy-model.md](docs/privacy-model.md): privacy levels, gates, and test expectations.
+- [docs/verification-model.md](docs/verification-model.md): verification metadata and source-of-truth rules.
+- [docs/adapter-contract.md](docs/adapter-contract.md): Codex-first adapter contract.
+- [docs/cli.md](docs/cli.md): current CLI commands and privacy notes.
+- [docs/development.md](docs/development.md): development workflow.
+- [examples/README.md](examples/README.md): local examples and sample project.
+
+## Development
+
+Install dependencies:
 
 ```bash
 corepack pnpm install
+```
+
+Build TypeScript project references:
+
+```bash
 corepack pnpm build
+```
+
+Run tests:
+
+```bash
 corepack pnpm test
-node packages/cli/dist/index.js init
+```
+
+Run the CLI from source:
+
+```bash
+node packages/cli/dist/index.js --help
+node packages/cli/dist/index.js doctor
+node packages/cli/dist/index.js doctor --security
 node packages/cli/dist/index.js compile ./examples/sample-project
-node packages/cli/dist/index.js attach codex
-node packages/cli/dist/index.js experiment thinking "fix packing label bug"
-node packages/cli/dist/index.js memory add --scope long_term --kind rule --title "Packing label rule" --content "A shipping label can only be printed when all products in the same label group are completed."
-node packages/cli/dist/index.js memory search "packing label"
-node packages/cli/dist/index.js remember --kind lesson --title "Partner route rule" --content "Partner user must route to /partner. /dashboard/summary returning 403 is correct due to least privilege." --tags partner,routing,permission,dashboard --sensitivity internal --prompt-policy summarize_only
-node packages/cli/dist/index.js task done --title "Partner route fix" --summary "Confirmed partner route behavior." --lesson "Partner user must route to /partner."
-node packages/cli/dist/index.js inspect
 node packages/cli/dist/index.js context "fix packing label bug"
+node packages/cli/dist/index.js preflight "permission routing issue" --role developer --model-target external_model
 ```
 
-If `pnpm` is already enabled on your machine, the equivalent `pnpm install`,
-`pnpm build` and `pnpm test` commands work as well.
-
-## Core AI Runtime
-
-`@atlas/runtime` now provides the first runnable Core AI Runtime:
-
-```ts
-import { createDefaultRuntime } from "@atlas/runtime";
-
-const runtime = createDefaultRuntime();
-const session = runtime.startSession({ agentId: "developer" });
-const result = await runtime.sendMessage(session.id, "fix packing label bug");
-console.log(result.response.message);
-```
-
-Core pieces:
-
-* `CoreRuntime`: orchestrates sessions, context, memory, agents, tools and security.
-* `RuntimeSession`: active conversation/session state.
-* `RuntimeEvent`: auditable runtime events.
-* `RuntimeResult`: agent response plus context and event history.
-* `SecurityGuard`: permission gate before every tool execution.
-
-## Playground
-
-Run the local CLI playground:
+Run framework detection:
 
 ```bash
-corepack pnpm build
-node apps/playground/dist/index.js
+node packages/cli/dist/index.js framework detect
+node packages/cli/dist/index.js framework verify-plan --task "fix auth middleware" --files middleware.ts
 ```
 
-Run scripted smoke scenarios:
+There is no separate `typecheck` npm script at the root today; `corepack pnpm
+build` is the current TypeScript verification command.
 
-```bash
-node apps/playground/dist/index.js --scenario
-```
+## Contributing
 
-Playground commands:
+See [CONTRIBUTING.md](CONTRIBUTING.md). In short: keep changes small, add tests
+for privacy/context/adapter behavior, do not commit secrets, and treat target
+projects as untrusted input.
 
-```text
-/agent developer|business|security
-/memory add <text>
-/memory short
-/memory long
-/tool echo <text>
-/tool admin
-/audit
-/clear
-/exit
-```
+## License
 
-The default playground security policy allows `read` and `execute`, and blocks
-`network`, `filesystem`, `database` and `admin`.
+No license file is present in this repository yet. The project owner should
+choose a license before public release.
 
-## Local Storage
+Recommended options to review:
 
-LMTI writes local state to:
-
-```text
-.lmti/
-  config.json
-  project.amf.json
-  index.json
-  memory/
-    short-term.json
-    long-term.json
-    lessons.json
-    events.jsonl
-  events/
-    tasks.jsonl
-  cache/
-  logs/
-```
-
-`.lmti/` is ignored by git because compiled cognition may contain internal
-project knowledge.
-
-## Legacy Atlas Migration
-
-Early Atlas prototypes may have written project mind state to `.atlas/`,
-`atlas/`, `project.amf.json`, `atlas.project.amf.json`, `mind.atlas` or
-`*.atlas` files. Current LMTI uses one canonical active mind:
-
-```text
-.lmti/project.amf.json
-```
-
-If you used the early Atlas prototype, run:
-
-```bash
-lmti doctor
-lmti doctor --fix
-lmti migrate --yes
-```
-
-`lmti doctor` reports duplicate Atlas/LMTI files, missing canonical files and
-conflicting AMF files. `lmti doctor --fix` recreates missing `.lmti` folders,
-normalizes config and migrates legacy state when it is safe. `lmti migrate
---yes` copies legacy Atlas data into `.lmti` and writes a migration report to
-`.lmti/logs/migration-YYYYMMDD-HHmmss.json`.
-
-Migration never deletes old Atlas files automatically. After confirming
-`.lmti/project.amf.json` is correct, archive or remove legacy files manually if
-your project policy allows it.
-
-## Artificial Mind Format v0
-
-The Sprint 1 output is `.lmti/project.amf.json`.
-
-Top-level domains:
-
-```json
-{
-  "project": {},
-  "modules": [],
-  "files": [],
-  "symbols": [],
-  "dependencies": [],
-  "api": [],
-  "database": [],
-  "rules": [],
-  "risks": [],
-  "history": [],
-  "architecture": [],
-  "summaries": [],
-  "unresolvedQuestions": []
-}
-```
-
-## Memory Core
-
-ATLAS stores structured memory, not raw chat history.
-
-Short-term memory is for active task context and can expire. Long-term memory is
-for confirmed project knowledge such as decisions, rules, bugs, risks,
-preferences and experiences.
-
-Examples:
-
-```bash
-node packages/cli/dist/index.js memory add --scope short_term --kind task --title "Fix packing label bug" --content "Current task is about blocking label printing until all products are completed."
-
-node packages/cli/dist/index.js memory add --scope long_term --kind rule --title "Packing label rule" --content "A shipping label can only be printed when all products in the same label group are completed."
-
-node packages/cli/dist/index.js memory search "packing label"
-
-node packages/cli/dist/index.js context "fix packing label bug"
-```
-
-Memory sensitivity is mandatory in the API and defaults to `internal` in the CLI.
-
-Prompt policy controls whether memory may enter a Context Pack:
-
-* `allow_raw`: raw content may appear only when sensitivity rules permit it.
-* `summarize_only`: context receives task-relevant summaries, not full memory.
-* `do_not_prompt`: memory is never sent into normal context.
-
-`lmti context` infers task intent before selecting memory. It returns
-`inferredIntent`, scores, selection reasons and `filteredOut` counts. By
-default, low-score unrelated memory is filtered; pass `--include-low-score`
-only when auditing context selection.
-
-Context safety:
-
-* `public` and `internal` memory can appear normally in context output.
-* `confidential` memory appears only as summarized metadata.
-* `secret` memory is excluded from normal context.
-
-Strict context privacy:
-
-* `internal` memory is summarized by default; raw internal memory requires
-  `--role owner --include-raw`.
-* `confidential` memory is always summarized in context.
-* `secret` memory is excluded from normal context; owner metadata access uses
-  `--include-secret-meta`.
-* `do_not_prompt` memory is excluded from context.
-* Context privacy filtering is audited in `.lmti/logs/privacy-audit.jsonl`.
-
-Runtime memory:
-
-* `ShortTermMemory`: session-local task and reasoning context.
-* `LongTermMemory`: durable confirmed knowledge.
-* `InMemoryStore`: Phase 4 in-memory implementation, replaceable later with SQLite, Postgres, file storage or vector storage.
-
-## Agents
-
-`@atlas/agents` ships three deterministic sample agents:
-
-* `DeveloperAgent`: technical/code analysis and implementation guidance.
-* `BusinessAgent`: business requirements, module boundaries and roadmap thinking.
-* `SecurityAgent`: permission, data exposure and risky action review.
-
-Create a new agent by implementing `AgentDefinition` and registering it:
-
-```ts
-runtime.registerAgent({
-  id: "custom",
-  name: "Custom Agent",
-  role: "developer",
-  instructions: {
-    objective: "Do one focused job.",
-    boundaries: ["Use runtime callbacks for tools."]
-  },
-  async respond(message, context) {
-    const result = await context.executeTool("memory.search", { query: message });
-    return {
-      agentId: "custom",
-      role: "developer",
-      message: `Handled: ${message}`,
-      toolResults: [result]
-    };
-  }
-});
-```
-
-Agents receive `executeTool` from runtime and should not bypass security.
-
-## Tools
-
-`@atlas/tools` provides:
-
-* `ToolRegistry`
-* `echoTool`
-* `memorySearchTool`
-* `auditLogTool`
-
-Create a new tool:
-
-```ts
-runtime.registerTool({
-  name: "project.read",
-  description: "Read safe project metadata.",
-  permissionRequired: "read",
-  async execute(input, context) {
-    return { ok: true, data: { input } };
-  }
-});
-```
-
-Every tool registered through `ToolRegistry` is checked by `SecurityGuard`
-before execution.
-
-## Security Policy
-
-Runtime tool permissions:
-
-```text
-read
-write
-execute
-network
-filesystem
-database
-admin
-```
-
-Example:
-
-```ts
-runtime.attachSecurityPolicy({
-  id: "local-dev",
-  name: "Local Dev",
-  permissions: ["read", "execute"],
-  defaultDecision: "deny"
-});
-```
-
-Denied tool executions return a clear error and still create audit entries.
-
-## Cognitive Privacy Layer
-
-ATLAS enforces privacy before memory is returned to CLI output or Context Packs.
-
-Roles:
-
-```text
-owner
-maintainer
-developer
-agent
-readonly
-external_model
-```
-
-Examples:
-
-```bash
-node packages/cli/dist/index.js memory list --role developer
-node packages/cli/dist/index.js memory search "packing" --role agent
-node packages/cli/dist/index.js context "fix packing label bug" --role agent
-node packages/cli/dist/index.js context "fix payment bug" --role external_model
-node packages/cli/dist/index.js context "fix payment bug" --role owner --include-secret
-```
-
-Privacy reports:
-
-```bash
-node packages/cli/dist/index.js privacy audit
-node packages/cli/dist/index.js privacy check
-```
-
-Policy summary:
-
-* `public`: allowed by default.
-* `internal`: allowed for owner, maintainer, developer and agent.
-* `confidential`: summarized by default; raw only for owner/maintainer with explicit raw access.
-* `secret`: denied by default; raw only for owner with `--include-secret`.
-* `external_model`: never receives raw confidential or secret memory.
-
-Sensitive access to confidential and secret memory is written to:
-
-```text
-.lmti/privacy/audit.jsonl
-```
-
-Safe context example:
-
-```bash
-node packages/cli/dist/index.js memory add --scope long_term --kind rule --title "Payment secret" --content "password=example-placeholder" --sensitivity secret
-node packages/cli/dist/index.js context "fix payment bug" --role external_model
-node packages/cli/dist/index.js privacy audit
-```
-
-The external-model context must not expose the secret content.
-
-## Security Boundaries
-
-`lmti compile` treats target repositories as untrusted input.
-
-MVP-0:
-
-* does not execute target project code,
-* does not install target dependencies,
-* ignores `.git`, `node_modules`, `dist`, `build`, `.lmti`, `.atlas` and cache folders,
-* detects obvious secret-like patterns,
-* redacts secret values from AMF evidence,
-* stores summaries and metadata instead of raw source content.
-
-## Package Boundaries
-
-```text
-packages/types     AMF v0 types and constants
-packages/graph     Dependency graph helpers
-packages/compiler  Knowledge Compiler v0
-packages/kernel    Minimal Mind Kernel for AMF loading, inspection and Context Packs
-packages/migration Legacy Atlas detection, migration and storage doctor helpers
-packages/memory    Local AMF and structured memory storage
-packages/privacy   Cognitive privacy helpers
-packages/security  Runtime permission guard and audit log
-packages/tools     Tool registry and sample tools
-packages/agents    Agent definitions and sample agents
-packages/context   App context assembly
-packages/reasoning Reasoning placeholders for future sprints
-packages/runtime   Core AI Runtime plus AMF inspect/context helpers
-packages/cli       lmti executable
-packages/mcp       MCP-ready local stub
-apps/playground    Local runtime playground
-```
-
-## Phase 4 Roadmap
-
-Phase 4B should focus on:
-
-* persistent runtime memory store backed by encrypted local files or SQLite,
-* richer agent planning while keeping tool execution behind `SecurityGuard`,
-* web UI playground if the CLI scenarios stabilize,
-* deeper integration between AMF context packs and runtime sessions,
-* policy profiles for developer, agent and external model execution.
+- MIT: simple and permissive.
+- Apache-2.0: permissive with an explicit patent grant.
+- AGPL-3.0: stronger copyleft, including network-use considerations.
+- Open-core: keep the local CLI/memory/privacy foundation open and reserve
+  future team, hosted, enterprise policy, or managed-support features for a
+  separate commercial offering.

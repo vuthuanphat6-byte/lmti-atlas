@@ -14,8 +14,8 @@ import type { BlackboardEntry, CognitiveContextItem, CognitiveGoal, IntegratedCo
 
 const goal: CognitiveGoal = {
   id: "goal:dashboard-permission",
-  title: "Fix dashboard Agent permission issue",
-  description: "Diagnose dashboard Agent 403 and route permission behavior.",
+  title: "Fix permission routing issue",
+  description: "Diagnose permission routing and route permission behavior.",
   priority: 0.9,
   successCriteria: ["inspect permission guard", "verify route"],
   constraints: ["do not expose secret memory"]
@@ -186,7 +186,7 @@ describe("@atlas/cognition", () => {
 
   it("arbitrates focus and rejects noisy candidates", () => {
     const focus = arbitrateCognitiveFocus({
-      task: "dashboard Agent 403",
+      task: "permission routing",
       goal,
       entries: [
         entry("permission", { priority: 0.9, activation: 0.9, summary: "dashboard runtime/permission issue" }),
@@ -206,7 +206,7 @@ describe("@atlas/cognition", () => {
   it("runs a cognitive cycle with focus, broadcasts and explanation", () => {
     const result = runCognitiveCycle({
       projectId: "atlas-test",
-      task: "dashboard Agent 403 permission",
+      task: "permission routing issue",
       inferredIntent: {
         primaryIntent: "permission",
         secondaryIntents: ["dashboard", "routing"],

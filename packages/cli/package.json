@@ -1,13 +1,30 @@
 {
   "name": "lmti",
   "version": "0.0.0",
+  "description": "Local-first project memory and verification layer for AI coding agents.",
   "private": false,
+  "keywords": [
+    "ai-agent",
+    "coding-agent",
+    "codex",
+    "project-memory",
+    "context-routing",
+    "privacy",
+    "verification",
+    "developer-tools"
+  ],
   "bin": {
     "lmti": "dist/index.js",
     "atlas": "dist/index.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "dependencies": {
     "@atlas/compiler": "workspace:*",
     "@atlas/cognition": "workspace:*",

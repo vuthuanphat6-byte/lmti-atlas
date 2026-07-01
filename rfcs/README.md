@@ -1,11 +1,27 @@
-# ATLAS RFCs
+# ATLAS/LMTI RFC Archive
 
-RFCs are the design memory of ATLAS.
+RFCs are archived research notes for ATLAS/LMTI.
 
-They are not implementation tickets.
+They are not current product documentation and they are not implementation
+tickets. Some older RFCs use broader "Artificial Mind", "cognitive kernel",
+"server", "dashboard", "plugin" or commercial language. Treat that language as
+historical vision unless it is restated in the root README or current docs.
 
-They exist to make architectural decisions reviewable, challengeable and
-evolvable.
+For current scope, use:
+
+```text
+README.md
+ROADMAP.md
+docs/architecture.md
+docs/privacy-model.md
+docs/verification-model.md
+docs/adapter-contract.md
+docs/cli.md
+docs/development.md
+```
+
+The current product scope is local-first project memory and verification for AI
+coding agents, with Codex as the first workflow.
 
 ## Research Engineer Rule
 

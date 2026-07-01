@@ -85,6 +85,7 @@ async function createFixtureProject(): Promise<string> {
 
   await writeFile(path.join(root, "node_modules", "ignored", "index.ts"), "export const ignored = true;", "utf8");
   await writeFile(path.join(root, ".env"), `OPENAI_API_KEY=${compilerSecretFixture}`, "utf8");
+  await writeFile(path.join(root, ".env.example"), "API_BASE_URL=http://localhost:3000\n", "utf8");
   await writeFile(path.join(root, "wp-config.php"), "<?php define('DB_PASSWORD', 'fixture-db-password');", "utf8");
   await writeFile(path.join(root, "tools", "dtf-layout-pc", "config.local.json"), "{\"token\":\"fixture-local-token\"}", "utf8");
   await writeFile(path.join(root, "tsconfig.tsbuildinfo"), "generated build cache", "utf8");
@@ -102,6 +103,7 @@ describe("Knowledge Compiler v0", () => {
     expect(amf.files.map((file) => file.path)).toContain("src/orders/packing.ts");
     expect(amf.files.some((file) => file.path.includes("node_modules"))).toBe(false);
     expect(amf.files.some((file) => file.path === ".env")).toBe(false);
+    expect(amf.files.some((file) => file.path === ".env.example")).toBe(true);
     expect(amf.files.some((file) => file.path === "wp-config.php")).toBe(false);
     expect(amf.files.some((file) => file.path.endsWith("config.local.json"))).toBe(false);
     expect(amf.files.some((file) => file.path.endsWith(".tsbuildinfo"))).toBe(false);
@@ -115,6 +117,27 @@ describe("Knowledge Compiler v0", () => {
     expect(JSON.stringify(amf)).not.toContain(compilerSecretFixture);
     expect(JSON.stringify(amf)).not.toContain("fixture-db-password");
     expect(JSON.stringify(amf)).not.toContain("fixture-local-token");
+  });
+
+  it("applies .lmtiignore rules without trusting ignored legacy and asset paths", async () => {
+    const root = await createFixtureProject();
+    await mkdir(path.join(root, "public", "uploads"), { recursive: true });
+    await mkdir(path.join(root, "wp-content", "plugins"), { recursive: true });
+    await writeFile(path.join(root, "public", "uploads", "hero.png"), "not-real-image", "utf8");
+    await writeFile(path.join(root, "wp-content", "plugins", "legacy.php"), "<?php echo 'legacy';", "utf8");
+    await writeFile(
+      path.join(root, ".lmtiignore"),
+      ["public/uploads/", "wp-content/", "*.sql", "!database/schema.sql", ""].join("\n"),
+      "utf8"
+    );
+
+    const amf = await compileProject(root);
+    const indexedPaths = amf.files.map((file) => file.path);
+
+    expect(indexedPaths).not.toContain("public/uploads/hero.png");
+    expect(indexedPaths.some((filePath) => filePath.startsWith("wp-content/"))).toBe(false);
+    expect(indexedPaths).toContain("database/schema.sql");
+    expect(amf.project.sourceBoundary.ignoredFiles).toContain(".lmtiignore:*.sql");
   });
 
   it("marks secret-like findings as protected risks", async () => {

@@ -7,7 +7,7 @@ describe("sample agents", () => {
     const store = new InMemoryStore();
     const response = await DeveloperAgent.respond("fix packing label bug", {
       sessionId: "session-1",
-      projectId: "NOIR",
+      projectId: "sample-project",
       shortTermMemory: new ShortTermMemory(store),
       longTermMemory: new LongTermMemory(store),
       executeTool: async () => ({ ok: true, data: [] })

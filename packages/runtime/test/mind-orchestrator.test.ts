@@ -21,7 +21,7 @@ async function createWorkspace(): Promise<string> {
 
 describe("Mind Orchestrator", () => {
   it("detects security intent for dashboard 403 work", () => {
-    const intent = routeMindIntent("fix dashboard Agent loi 403");
+    const intent = routeMindIntent("fix partner dashboard permission 403");
 
     expect(intent.primary).toBe("security");
     expect(intent.secondary).toEqual(expect.arrayContaining(["code_fix", "erp_workflow"]));
@@ -139,7 +139,7 @@ describe("Mind Orchestrator", () => {
       { cwd }
     );
 
-    const result = await prepareCodexContext({ task: "write social post for NOIR", cwd });
+    const result = await prepareCodexContext({ task: "write social post for sample-project", cwd });
 
     expect(result.contextPacket.longMemory.map((memory) => memory.title)).not.toContain("Production PM2 deploy flow");
     expect(result.rejectedMemory.some((memory) => memory.title === "Production PM2 deploy flow")).toBe(true);

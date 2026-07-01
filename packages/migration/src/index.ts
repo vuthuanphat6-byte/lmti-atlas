@@ -103,6 +103,8 @@ export interface DoctorReport {
   recommendedFixes: string[];
   changes: string[];
   warnings: string[];
+  environment: DoctorEnvironment;
+  amf: DoctorAmfDiagnostics;
   canonical: CanonicalStorageState;
   legacyEntries: Array<Omit<LegacyEntry, "absolutePath" | "safeToRead">>;
 }
@@ -110,6 +112,54 @@ export interface DoctorReport {
 export interface DoctorOptions {
   fix?: boolean;
   now?: Date;
+}
+
+export interface DoctorEnvironment {
+  cli: "ok";
+  nodeVersion: string;
+  packageManager: string;
+  lmtiVersion: string;
+  repoPath: string;
+}
+
+export type NoiseRisk = "low" | "medium" | "high";
+export type ProjectMemoryStatus = "ok" | "missing" | "invalid" | "uncompiled";
+
+export interface DoctorFolderStat {
+  name: string;
+  files: number;
+  sizeBytes: number;
+}
+
+export interface DoctorZoneStat {
+  zone: "core" | "backend" | "frontend" | "docs" | "legacy" | "assets" | "secrets_blocked" | "other";
+  files: number;
+  sizeBytes: number;
+}
+
+export interface DoctorSensitivePathFinding {
+  kind: "env" | "secret-key" | "database-dump" | "local-config";
+  count: number;
+  examples: string[];
+}
+
+export interface DoctorAmfDiagnostics {
+  projectMemory: ProjectMemoryStatus;
+  amfPath: string;
+  amfSizeBytes: number;
+  indexedFiles: number;
+  modules: number;
+  risks: number;
+  topFolders: DoctorFolderStat[];
+  zones: DoctorZoneStat[];
+  noiseRisk: NoiseRisk;
+  legacyWordPressDetected: boolean;
+  assetNoiseFiles: number;
+  lmtiIgnoreExists: boolean;
+  ignoreRulesApplied: boolean;
+  sensitivePathFindings: DoctorSensitivePathFinding[];
+  suggestedActions: string[];
+  verificationMode: string[];
 }
 
 export interface MigrationOptions {
@@ -345,12 +395,16 @@ export async function doctorLmti(cwd = process.cwd(), options: DoctorOptions = {
   }
 
   const problems = createDoctorProblems(scan);
+  const environment = await readDoctorEnvironment(root);
+  const amf = await diagnoseAmf(root, scan.canonical);
   return {
-    status: statusForProblems(problems),
+    status: statusForDoctor(problems, amf),
     problems,
     recommendedFixes: recommendedFixesFor(problems),
     changes,
     warnings,
+    environment,
+    amf,
     canonical: scan.canonical,
     legacyEntries: scan.legacyEntries.map(summarizeLegacyEntry)
   };
@@ -377,7 +431,38 @@ export function formatMigrationResult(result: MigrationResult): string {
 }
 
 export function formatDoctorReport(report: DoctorReport): string {
-  const lines = ["LMTI Doctor", `Status: ${report.status}`];
+  const lines = [
+    "LMTI Doctor Report",
+    `Status: ${report.status}`,
+    `- CLI: ${report.environment.cli.toUpperCase()}`,
+    `- Version: ${report.environment.lmtiVersion}`,
+    `- Node: ${report.environment.nodeVersion}`,
+    `- Package manager: ${report.environment.packageManager}`,
+    `- Repo: ${report.environment.repoPath}`,
+    `- Project memory: ${report.amf.projectMemory.toUpperCase()}`,
+    `- AMF size: ${formatBytes(report.amf.amfSizeBytes)}`,
+    `- Indexed files: ${report.amf.indexedFiles}`,
+    `- Modules: ${report.amf.modules}`,
+    `- Noise risk: ${report.amf.noiseRisk.toUpperCase()}`,
+    `- Legacy WordPress detected: ${report.amf.legacyWordPressDetected ? "YES" : "NO"}`,
+    `- Asset noise files: ${report.amf.assetNoiseFiles}`,
+    `- .lmtiignore: ${report.amf.lmtiIgnoreExists ? "FOUND" : "MISSING"}`,
+    `- Ignore rules applied: ${report.amf.ignoreRulesApplied ? "YES" : "NO"}`
+  ];
+
+  appendFolderStats(lines, "Top folders", report.amf.topFolders);
+  appendZoneStats(lines, "Context zones", report.amf.zones);
+
+  if (report.amf.sensitivePathFindings.length > 0) {
+    lines.push("Sensitive path warnings:");
+    for (const finding of report.amf.sensitivePathFindings) {
+      lines.push(`- ${finding.kind}: ${finding.count} matched path(s); examples: ${finding.examples.join(", ")}`);
+    }
+  }
+
+  appendSection(lines, "Suggested actions", report.amf.suggestedActions);
+  appendSection(lines, "Verification rules", report.amf.verificationMode);
+
   if (report.problems.length === 0) {
     lines.push("Problems: none");
   } else {
@@ -780,11 +865,394 @@ function createDoctorProblems(scan: LegacyAtlasScan): DoctorProblem[] {
   return problems;
 }
 
+async function readDoctorEnvironment(root: string): Promise<DoctorEnvironment> {
+  return {
+    cli: "ok",
+    nodeVersion: process.version,
+    packageManager: await detectPackageManager(root),
+    lmtiVersion: await detectLmtiVersion(root),
+    repoPath: normalizePath(root)
+  };
+}
+
+async function detectPackageManager(root: string): Promise<string> {
+  const packageJson = await readJsonIfRecord(path.join(root, "package.json"));
+  const declared = stringValue(packageJson?.packageManager);
+  if (declared) {
+    return declared;
+  }
+  if (await describePath(path.join(root, "pnpm-lock.yaml"))) {
+    return "pnpm";
+  }
+  if (await describePath(path.join(root, "yarn.lock"))) {
+    return "yarn";
+  }
+  if (await describePath(path.join(root, "package-lock.json"))) {
+    return "npm";
+  }
+  return "unknown";
+}
+
+async function detectLmtiVersion(root: string): Promise<string> {
+  const candidates = [
+    path.join(root, "packages", "cli", "package.json"),
+    path.join(root, "node_modules", "lmti", "package.json")
+  ];
+  for (const candidate of candidates) {
+    const manifest = await readJsonIfRecord(candidate);
+    const version = stringValue(manifest?.version);
+    if (version) {
+      return version;
+    }
+  }
+  return "unknown";
+}
+
+async function diagnoseAmf(root: string, canonical: CanonicalStorageState): Promise<DoctorAmfDiagnostics> {
+  const lmtiIgnoreExists = Boolean(await describePath(path.join(root, ".lmtiignore")));
+  const sensitivePathFindings = await findSensitivePathFindings(root);
+  const empty = createEmptyAmfDiagnostics(canonical.amfPath, lmtiIgnoreExists, sensitivePathFindings);
+
+  if (!canonical.projectAmfExists) {
+    return {
+      ...empty,
+      projectMemory: "missing",
+      suggestedActions: suggestedActionsFor({
+        projectMemory: "missing",
+        lmtiIgnoreExists,
+        ignoreRulesApplied: false,
+        noiseRisk: "low",
+        sensitivePathFindings
+      })
+    };
+  }
+
+  let amf: AmfDocument;
+  let amfSizeBytes = 0;
+  try {
+    const [text, info] = await Promise.all([
+      fs.readFile(canonical.amfPath, "utf8"),
+      describePath(canonical.amfPath)
+    ]);
+    amfSizeBytes = info?.sizeBytes ?? Buffer.byteLength(text);
+    amf = JSON.parse(text) as AmfDocument;
+  } catch {
+    return {
+      ...empty,
+      projectMemory: "invalid",
+      suggestedActions: suggestedActionsFor({
+        projectMemory: "invalid",
+        lmtiIgnoreExists,
+        ignoreRulesApplied: false,
+        noiseRisk: "low",
+        sensitivePathFindings
+      })
+    };
+  }
+
+  const files = Array.isArray(amf.files) ? amf.files : [];
+  const modules = Array.isArray(amf.modules) ? amf.modules : [];
+  const risks = Array.isArray(amf.risks) ? amf.risks : [];
+  const topFolders = topFolderStats(files);
+  const zones = zoneStats(files);
+  const legacyWordPressDetected = files.some((file) => isLegacyWordPressPath(file.path));
+  const assetNoiseFiles = files.filter((file) => zoneForPath(file.path) === "assets").length;
+  const ignoreRulesApplied = Boolean(
+    amf.project?.sourceBoundary?.ignoredFiles?.some((rule) => rule.startsWith(`${LMTI_DIR}ignore:`) || rule.startsWith(".lmtiignore:"))
+  );
+  const noiseRisk = calculateNoiseRisk(files.length, legacyWordPressDetected, assetNoiseFiles, lmtiIgnoreExists, ignoreRulesApplied);
+  const projectMemory: ProjectMemoryStatus = !amf.project?.compiledAt || amf.project.checksum === "uncompiled" ? "uncompiled" : "ok";
+
+  return {
+    projectMemory,
+    amfPath: normalizePath(canonical.amfPath),
+    amfSizeBytes,
+    indexedFiles: files.length,
+    modules: modules.length,
+    risks: risks.length,
+    topFolders,
+    zones,
+    noiseRisk,
+    legacyWordPressDetected,
+    assetNoiseFiles,
+    lmtiIgnoreExists,
+    ignoreRulesApplied,
+    sensitivePathFindings,
+    suggestedActions: suggestedActionsFor({
+      projectMemory,
+      lmtiIgnoreExists,
+      ignoreRulesApplied,
+      noiseRisk,
+      sensitivePathFindings
+    }),
+    verificationMode: verificationRules()
+  };
+}
+
+function createEmptyAmfDiagnostics(
+  amfPath: string,
+  lmtiIgnoreExists: boolean,
+  sensitivePathFindings: DoctorSensitivePathFinding[]
+): DoctorAmfDiagnostics {
+  return {
+    projectMemory: "missing",
+    amfPath: normalizePath(amfPath),
+    amfSizeBytes: 0,
+    indexedFiles: 0,
+    modules: 0,
+    risks: 0,
+    topFolders: [],
+    zones: [],
+    noiseRisk: "low",
+    legacyWordPressDetected: false,
+    assetNoiseFiles: 0,
+    lmtiIgnoreExists,
+    ignoreRulesApplied: false,
+    sensitivePathFindings,
+    suggestedActions: [],
+    verificationMode: verificationRules()
+  };
+}
+
+function topFolderStats(files: AmfDocument["files"]): DoctorFolderStat[] {
+  const byFolder = new Map<string, DoctorFolderStat>();
+  for (const file of files) {
+    const folder = firstPathSegment(file.path);
+    const current = byFolder.get(folder) ?? { name: folder, files: 0, sizeBytes: 0 };
+    current.files += 1;
+    current.sizeBytes += file.sizeBytes;
+    byFolder.set(folder, current);
+  }
+  return Array.from(byFolder.values())
+    .sort((left, right) => right.files - left.files || right.sizeBytes - left.sizeBytes || left.name.localeCompare(right.name))
+    .slice(0, 8);
+}
+
+function zoneStats(files: AmfDocument["files"]): DoctorZoneStat[] {
+  const byZone = new Map<DoctorZoneStat["zone"], DoctorZoneStat>();
+  for (const file of files) {
+    const zone = file.privacy === "protected" || file.riskFlags.includes("secret") ? "secrets_blocked" : zoneForPath(file.path);
+    const current = byZone.get(zone) ?? { zone, files: 0, sizeBytes: 0 };
+    current.files += 1;
+    current.sizeBytes += file.sizeBytes;
+    byZone.set(zone, current);
+  }
+  return Array.from(byZone.values()).sort((left, right) => right.files - left.files || left.zone.localeCompare(right.zone));
+}
+
+function zoneForPath(filePath: string): DoctorZoneStat["zone"] {
+  const normalized = filePath.toLowerCase();
+  if (isLegacyWordPressPath(normalized) || /(^|\/)(legacy|wordpress)(\/|$)/.test(normalized)) {
+    return "legacy";
+  }
+  if (/(^|\/)(public\/assets|public\/uploads|assets|images|media)(\/|$)/.test(normalized) || isAssetLikePath(normalized)) {
+    return "assets";
+  }
+  if (/^(docs|rfcs|research|papers|philosophy)\//.test(normalized) || normalized.endsWith(".md")) {
+    return "docs";
+  }
+  if (/^(apps|src|app|pages|components|packages\/(?:cli|context|cognition|kernel))\//.test(normalized)) {
+    return "core";
+  }
+  if (/(^|\/)(api|server|backend|runtime|mcp|compiler|memory|privacy|security|world-model)(\/|$)/.test(normalized)) {
+    return "backend";
+  }
+  if (/(^|\/)(frontend|ui|client|components|pages|app)(\/|$)/.test(normalized)) {
+    return "frontend";
+  }
+  return "other";
+}
+
+function calculateNoiseRisk(
+  indexedFiles: number,
+  legacyWordPressDetected: boolean,
+  assetNoiseFiles: number,
+  lmtiIgnoreExists: boolean,
+  ignoreRulesApplied: boolean
+): NoiseRisk {
+  if (legacyWordPressDetected || assetNoiseFiles > 50 || (indexedFiles > 0 && assetNoiseFiles / indexedFiles > 0.25)) {
+    return "high";
+  }
+  if (!lmtiIgnoreExists || !ignoreRulesApplied || assetNoiseFiles > 0) {
+    return "medium";
+  }
+  return "low";
+}
+
+function suggestedActionsFor(input: {
+  projectMemory: ProjectMemoryStatus;
+  lmtiIgnoreExists: boolean;
+  ignoreRulesApplied: boolean;
+  noiseRisk: NoiseRisk;
+  sensitivePathFindings: DoctorSensitivePathFinding[];
+}): string[] {
+  const actions = new Set<string>();
+  if (input.projectMemory === "missing") {
+    actions.add("Run `lmti compile` after reviewing .lmtiignore.");
+  }
+  if (input.projectMemory === "invalid") {
+    actions.add("Regenerate .lmti/project.amf.json with `lmti compile`.");
+  }
+  if (input.projectMemory === "uncompiled") {
+    actions.add("Project memory is a placeholder; run `lmti compile` before trusting context.");
+  }
+  if (!input.lmtiIgnoreExists) {
+    actions.add("Add .lmtiignore to block build artifacts, legacy WordPress folders, assets and local secrets.");
+  } else if (!input.ignoreRulesApplied) {
+    actions.add("Run `lmti compile` so .lmtiignore rules are reflected in AMF sourceBoundary.");
+  }
+  if (input.noiseRisk === "high") {
+    actions.add("Reduce AMF noise before agent use; exclude legacy/assets or split context by zone.");
+  } else if (input.noiseRisk === "medium") {
+    actions.add("Review top folders and zone counts before using AMF as task context.");
+  }
+  if (input.sensitivePathFindings.length > 0) {
+    actions.add("Keep detected sensitive files out of AMF and source control; rotate exposed credentials if any value was committed.");
+  }
+  if (actions.size === 0) {
+    actions.add("No immediate action; continue verifying memory against source before edits.");
+  }
+  return Array.from(actions);
+}
+
+function verificationRules(): string[] {
+  return [
+    "Memory and AMF are advisory context, not source of truth.",
+    "Verify endpoints, schemas, imports and module existence with `rg` or file reads before editing.",
+    "When AMF conflicts with source code, source code and command output win.",
+    "Do not delete or refactor files based only on memory; prove imports/references first."
+  ];
+}
+
+async function findSensitivePathFindings(root: string): Promise<DoctorSensitivePathFinding[]> {
+  const findings = new Map<DoctorSensitivePathFinding["kind"], string[]>();
+  const ignoredDirectories = new Set([
+    ".git",
+    ".lmti",
+    ".atlas",
+    "node_modules",
+    "dist",
+    "build",
+    "coverage",
+    ".next",
+    ".turbo",
+    ".cache"
+  ]);
+  let visited = 0;
+  const maxVisited = 20_000;
+
+  async function walk(directory: string): Promise<void> {
+    if (visited >= maxVisited) {
+      return;
+    }
+    let entries: import("node:fs").Dirent[] = [];
+    try {
+      entries = await fs.readdir(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (visited >= maxVisited) {
+        return;
+      }
+      visited += 1;
+      const absolutePath = path.join(directory, entry.name);
+      const relativePath = normalizePath(path.relative(root, absolutePath));
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (ignoredDirectories.has(entry.name.toLowerCase())) {
+          continue;
+        }
+        await walk(absolutePath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      const kind = sensitivePathKind(relativePath);
+      if (!kind) {
+        continue;
+      }
+      const paths = findings.get(kind) ?? [];
+      paths.push(relativePath);
+      findings.set(kind, paths);
+    }
+  }
+
+  await walk(root);
+  return Array.from(findings.entries()).map(([kind, paths]) => ({
+    kind,
+    count: paths.length,
+    examples: paths.slice(0, 5)
+  }));
+}
+
+function sensitivePathKind(filePath: string): DoctorSensitivePathFinding["kind"] | undefined {
+  const normalized = filePath.toLowerCase();
+  const baseName = path.posix.basename(normalized);
+  if ((baseName === ".env" || /^\.env\.(?!example$|sample$)/.test(baseName)) && !isEnvExamplePath(normalized)) {
+    return "env";
+  }
+  if (/\.(pem|key|p12|pfx|crt|cer|token)$/.test(normalized) || /^id_(rsa|ed25519)(\.pub)?$/.test(baseName)) {
+    return "secret-key";
+  }
+  if (/\.(sql|dump|bak|zip)$/.test(normalized)) {
+    return "database-dump";
+  }
+  if (
+    baseName === ".npmrc" ||
+    baseName === ".yarnrc" ||
+    /^wp-config(?:\.local)?\.php$/.test(baseName) ||
+    /^docker-compose\.local\.ya?ml$/.test(baseName) ||
+    /\.local\.(json|ya?ml|toml)$/.test(baseName)
+  ) {
+    return "local-config";
+  }
+  return undefined;
+}
+
+function isEnvExamplePath(filePath: string): boolean {
+  const baseName = path.posix.basename(filePath.toLowerCase());
+  return baseName === ".env.example" || baseName === ".env.sample" || baseName.endsWith(".example.env");
+}
+
+function isLegacyWordPressPath(filePath: string): boolean {
+  return /(^|\/)(wp-admin|wp-content|wp-includes)(\/|$)/i.test(filePath);
+}
+
+function isAssetLikePath(filePath: string): boolean {
+  return /\.(png|jpe?g|gif|webp|avif|ico|bmp|tiff?|mp4|mov|avi|webm|mp3|wav|woff2?|ttf|eot)$/i.test(filePath);
+}
+
+function firstPathSegment(filePath: string): string {
+  return normalizePath(filePath).split("/").filter(Boolean)[0] ?? "root";
+}
+
 function statusForProblems(problems: DoctorProblem[]): DoctorStatus {
   if (problems.some((problem) => problem.severity === "error")) {
     return "error";
   }
   if (problems.some((problem) => problem.severity === "warning")) {
+    return "warning";
+  }
+  return "ok";
+}
+
+function statusForDoctor(problems: DoctorProblem[], amf: DoctorAmfDiagnostics): DoctorStatus {
+  const problemStatus = statusForProblems(problems);
+  if (problemStatus === "error" || amf.projectMemory === "invalid" || amf.projectMemory === "missing") {
+    return "error";
+  }
+  if (
+    problemStatus === "warning" ||
+    amf.projectMemory === "uncompiled" ||
+    amf.noiseRisk !== "low" ||
+    !amf.ignoreRulesApplied ||
+    amf.sensitivePathFindings.length > 0
+  ) {
     return "warning";
   }
   return "ok";
@@ -857,6 +1325,15 @@ async function describePath(targetPath: string): Promise<PathInfo | undefined> {
   }
 }
 
+async function readJsonIfRecord(filePath: string): Promise<JsonRecord | undefined> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function legacyPriority(relativePath: string): number {
   const normalized = relativePath.toLowerCase().replace(/\\/g, "/");
   const priorities = [
@@ -902,6 +1379,37 @@ function appendSection(lines: string[], title: string, entries: string[]): void 
   for (const entry of entries) {
     lines.push(`- ${entry}`);
   }
+}
+
+function appendFolderStats(lines: string[], title: string, entries: DoctorFolderStat[]): void {
+  if (entries.length === 0) {
+    return;
+  }
+  lines.push(`${title}:`);
+  for (const entry of entries) {
+    lines.push(`- ${entry.name}: ${entry.files} files, ${formatBytes(entry.sizeBytes)}`);
+  }
+}
+
+function appendZoneStats(lines: string[], title: string, entries: DoctorZoneStat[]): void {
+  if (entries.length === 0) {
+    return;
+  }
+  lines.push(`${title}:`);
+  for (const entry of entries) {
+    lines.push(`- ${entry.zone}: ${entry.files} files, ${formatBytes(entry.sizeBytes)}`);
+  }
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  const kib = value / 1024;
+  if (kib < 1024) {
+    return `${kib.toFixed(1)} KB`;
+  }
+  return `${(kib / 1024).toFixed(1)} MB`;
 }
 
 function formatTimestamp(date: Date): string {

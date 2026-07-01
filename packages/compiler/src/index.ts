@@ -24,6 +24,7 @@ import { hasSecretLikeMaterial, redactText } from "@atlas/privacy";
 
 const COMPILER_VERSION = "0.1.0";
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
+const LMTI_IGNORE_FILE = ".lmtiignore";
 
 const IGNORED_DIRECTORIES = [
   ".lmti",
@@ -43,7 +44,11 @@ const IGNORED_DIRECTORIES = [
   "logs",
   "tmp",
   "temp",
-  "vendor"
+  "vendor",
+  ".pnpm-store",
+  "wp-admin",
+  "wp-content",
+  "wp-includes"
 ];
 
 const IGNORED_FILE_PATTERNS = [
@@ -57,7 +62,19 @@ const IGNORED_FILE_PATTERNS = [
   /^id_rsa(?:\.pub)?$/i,
   /^id_ed25519(?:\.pub)?$/i,
   /\.tsbuildinfo$/i,
-  /\.(?:pem|key|p12|pfx|crt|cer|token)$/i
+  /\.min\.js$/i,
+  /\.map$/i,
+  /\.(?:pem|key|p12|pfx|crt|cer|token)$/i,
+  /\.(?:zip|bak|log|dump)$/i,
+  /\.(?:png|jpe?g|gif|webp|avif|ico|bmp|tiff?|mp4|mov|avi|webm|mp3|wav|woff2?|ttf|eot)$/i
+];
+
+const IGNORED_PATH_PATTERNS = [
+  /(^|\/)public\/uploads(\/|$)/i,
+  /(^|\/)public\/assets(\/|$)/i,
+  /(^|\/)wp-admin(\/|$)/i,
+  /(^|\/)wp-content(\/|$)/i,
+  /(^|\/)wp-includes(\/|$)/i
 ];
 
 const TEXT_EXTENSIONS = new Set([
@@ -85,6 +102,19 @@ const DATABASE_EXTENSIONS = new Set([".sql", ".prisma"]);
 export interface CompileOptions {
   cwd?: string;
   maxFileBytes?: number;
+  lmtiIgnoreFile?: string;
+}
+
+interface SourceBoundaryRules {
+  ignoredDirectories: string[];
+  ignoredFiles: string[];
+  ignoreRules: IgnoreRule[];
+}
+
+interface IgnoreRule {
+  raw: string;
+  negated: boolean;
+  regex: RegExp;
 }
 
 interface ObservedFile {
@@ -119,7 +149,8 @@ export async function compileProject(projectPath: string, options: CompileOption
 
   const realRoot = await fs.realpath(root);
   const maxFileBytes = options.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES;
-  const observedFiles = await scanProject(realRoot, maxFileBytes);
+  const sourceBoundary = await createSourceBoundary(realRoot, options.lmtiIgnoreFile ?? LMTI_IGNORE_FILE);
+  const observedFiles = await scanProject(realRoot, maxFileBytes, sourceBoundary);
   const projectName = await detectProjectName(realRoot);
   const fileSet = new Set(observedFiles.map((file) => file.relativePath));
   const fileToModule = new Map<string, string>();
@@ -239,8 +270,8 @@ export async function compileProject(projectPath: string, options: CompileOption
       },
       sourceBoundary: {
         root: normalizePath(realRoot),
-        ignoredDirectories: IGNORED_DIRECTORIES,
-        ignoredFiles: IGNORED_FILE_PATTERNS.map((pattern) => pattern.source),
+        ignoredDirectories: sourceBoundary.ignoredDirectories,
+        ignoredFiles: sourceBoundary.ignoredFiles,
         maxFileBytes
       },
       checksum
@@ -262,7 +293,7 @@ export async function compileProject(projectPath: string, options: CompileOption
   };
 }
 
-async function scanProject(root: string, maxFileBytes: number): Promise<ObservedFile[]> {
+async function scanProject(root: string, maxFileBytes: number, sourceBoundary: SourceBoundaryRules): Promise<ObservedFile[]> {
   const observed: ObservedFile[] = [];
 
   async function walk(directory: string): Promise<void> {
@@ -277,7 +308,8 @@ async function scanProject(root: string, maxFileBytes: number): Promise<Observed
       const absolutePath = path.join(directory, entry.name);
 
       if (entry.isDirectory()) {
-        if (isIgnoredDirectory(entry.name)) {
+        const relativeDirectory = normalizePath(path.relative(root, absolutePath));
+        if (isIgnoredDirectory(entry.name, relativeDirectory, sourceBoundary)) {
           continue;
         }
         await walk(absolutePath);
@@ -293,7 +325,7 @@ async function scanProject(root: string, maxFileBytes: number): Promise<Observed
       if (!isPathInside(root, realEntryPath) || isPathTraversal(relativePath)) {
         continue;
       }
-      if (isIgnoredFile(entry.name, relativePath)) {
+      if (isIgnoredFile(entry.name, relativePath, sourceBoundary)) {
         continue;
       }
 
@@ -902,14 +934,133 @@ function isExternalSpecifier(specifier: string): boolean {
   return !specifier.startsWith(".") && !specifier.startsWith("/");
 }
 
-function isIgnoredDirectory(name: string): boolean {
-  return IGNORED_DIRECTORIES.includes(name.toLowerCase());
+async function createSourceBoundary(root: string, ignoreFileName: string): Promise<SourceBoundaryRules> {
+  const ignoreRules = await readLmtiIgnoreRules(root, ignoreFileName);
+  return {
+    ignoredDirectories: [...IGNORED_DIRECTORIES, ...IGNORED_PATH_PATTERNS.map((pattern) => pattern.source)],
+    ignoredFiles: [
+      ...IGNORED_FILE_PATTERNS.map((pattern) => pattern.source),
+      ...IGNORED_PATH_PATTERNS.map((pattern) => pattern.source),
+      ...ignoreRules.map((rule) => `${LMTI_IGNORE_FILE}:${rule.raw}`)
+    ],
+    ignoreRules
+  };
 }
 
-function isIgnoredFile(name: string, relativePath: string): boolean {
+async function readLmtiIgnoreRules(root: string, ignoreFileName: string): Promise<IgnoreRule[]> {
+  let text = "";
+  try {
+    text = await fs.readFile(path.join(root, ignoreFileName), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    return [];
+  }
+
+  return text
+    .split(/\r?\n/)
+    .map(parseLmtiIgnoreRule)
+    .filter((rule): rule is IgnoreRule => Boolean(rule));
+}
+
+function parseLmtiIgnoreRule(line: string): IgnoreRule | undefined {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#")) {
+    return undefined;
+  }
+
+  const negated = trimmed.startsWith("!");
+  const rawPattern = negated ? trimmed.slice(1).trim() : trimmed;
+  if (!rawPattern || rawPattern.startsWith("#")) {
+    return undefined;
+  }
+
+  const normalized = normalizePath(rawPattern);
+  const directoryOnly = normalized.endsWith("/");
+  const anchored = normalized.startsWith("/");
+  const body = normalized.replace(/^\/+/, "").replace(/\/+$/, "");
+  if (!body) {
+    return undefined;
+  }
+
+  const hasSlash = body.includes("/");
+  const prefix = anchored || hasSlash ? "^" : "(^|.*/)";
+  const suffix = directoryOnly ? "(?:/.*)?$" : "$";
+  return {
+    raw: trimmed,
+    negated,
+    regex: new RegExp(`${prefix}${globToRegexSource(body)}${suffix}`, "i")
+  };
+}
+
+function globToRegexSource(pattern: string): string {
+  let source = "";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    const next = pattern[index + 1];
+    if (char === "*" && next === "*") {
+      source += ".*";
+      index += 1;
+      continue;
+    }
+    if (char === "*") {
+      source += "[^/]*";
+      continue;
+    }
+    if (char === "?") {
+      source += "[^/]";
+      continue;
+    }
+    source += escapeRegex(char);
+  }
+  return source;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
+function isIgnoredDirectory(name: string, relativePath: string, sourceBoundary: SourceBoundaryRules): boolean {
+  return (
+    IGNORED_DIRECTORIES.includes(name.toLowerCase()) ||
+    isIgnoredByPathPattern(relativePath) ||
+    isIgnoredByLmtiIgnore(relativePath, sourceBoundary.ignoreRules)
+  );
+}
+
+function isIgnoredFile(name: string, relativePath: string, sourceBoundary: SourceBoundaryRules): boolean {
   const normalizedName = name.toLowerCase();
   const normalizedPath = relativePath.toLowerCase();
-  return IGNORED_FILE_PATTERNS.some((pattern) => pattern.test(normalizedName) || pattern.test(normalizedPath));
+  const ignoredByDefaultFilePattern = !isEnvExampleFile(name) &&
+    IGNORED_FILE_PATTERNS.some((pattern) => pattern.test(normalizedName) || pattern.test(normalizedPath));
+
+  return (
+    ignoredByDefaultFilePattern ||
+    isIgnoredByPathPattern(relativePath) ||
+    isIgnoredByLmtiIgnore(relativePath, sourceBoundary.ignoreRules)
+  );
+}
+
+function isEnvExampleFile(name: string): boolean {
+  const normalizedName = name.toLowerCase();
+  return normalizedName === ".env.example" || normalizedName === ".env.sample" || normalizedName.endsWith(".example.env");
+}
+
+function isIgnoredByPathPattern(relativePath: string): boolean {
+  const normalizedPath = normalizePath(relativePath);
+  return IGNORED_PATH_PATTERNS.some((pattern) => pattern.test(normalizedPath));
+}
+
+function isIgnoredByLmtiIgnore(relativePath: string, ignoreRules: IgnoreRule[]): boolean {
+  const normalizedPath = normalizePath(relativePath).replace(/\/+$/, "");
+  let ignored = false;
+  for (const rule of ignoreRules) {
+    if (rule.regex.test(normalizedPath)) {
+      ignored = !rule.negated;
+    }
+  }
+  return ignored;
 }
 
 function isTextCandidate(name: string, extension: string): boolean {

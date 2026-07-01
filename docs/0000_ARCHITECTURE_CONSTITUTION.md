@@ -1,5 +1,9 @@
 # ATLAS-0000: Architecture Constitution
 
+> Research archive. This document captures early ATLAS vision language and is
+> not current product documentation for the Local Alpha. For current scope, use
+> the root README and `docs/architecture.md`.
+
 Version: 0.1
 
 ## Mission

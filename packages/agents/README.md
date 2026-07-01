@@ -1,5 +1,5 @@
 # @atlas/agents
 
-Agent definitions for ATLAS Core Runtime.
+Deterministic agent helpers for the experimental LMTI runtime.
 
-Agents are deterministic in Phase 4 and use runtime-provided callbacks for memory and tool access.
+Agents use runtime-provided callbacks for memory and tool access.

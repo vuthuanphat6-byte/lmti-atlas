@@ -1,4 +1,7 @@
-# Neural Architecture Audit
+# Architecture Boundary Audit
+
+> Historical audit note. The "neural" wording is not current product
+> positioning; the useful part of this document is package-boundary review.
 
 Date: 2026-06-29
 
