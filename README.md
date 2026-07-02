@@ -1,5 +1,7 @@
 ﻿# LMTI-Atlas
 
+![CI](https://img.shields.io/github/actions/workflow/status/vuthuanphat6-byte/lmti-atlas/ci.yml?branch=main&label=CI&logo=githubactions)
+
 A local-first project mind layer for AI coding agents.
 
 LMTI-Atlas helps AI agents compile project understanding, retrieve policy-safe context, remember project lessons, and reduce repeated codebase exploration.
