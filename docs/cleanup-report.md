@@ -49,7 +49,7 @@ Clean first, change carefully, preserve behavior.
 | core | `schemas/` | keep | JSON Boundary schemas for CLI, memory, adapter, and config validation. JSON is boundary only, not memory storage. |
 | docs | `README.md`, `docs/`, `SECURITY.md`, `CONTRIBUTING.md`, `ROADMAP.md`, `CHANGELOG.md` | keep | Product, security, architecture, and open-source readiness docs. |
 | config | `package.json`, `pnpm-workspace.yaml`, `tsconfig*.json`, package `tsconfig.json` files | keep | Active Node/TypeScript workspace config. |
-| legacy | `.atlas/`, docs with `ATLAS-*`, `rfcs/RFC-0001...RFC-0010`, `philosophy/` | keep temporarily | Legacy/internal ATLAS material. Keep for migration/history; do not remove until naming migration is complete. |
+| legacy | `.atlas/`, docs with `ATLAS-*`, `rfcs/RFC-0001...RFC-0010` | keep temporarily | Legacy/internal ATLAS material. The standalone `philosophy/` notes were removed after owner confirmation. |
 | legacy | `packages/*` using `@atlas/*` namespace | keep temporarily | Internal local-alpha namespace. Documented as implementation detail of LMTI. |
 | experimental | `experiments/`, `apps/playground/`, `apps/codex-assistant/`, `papers/`, `research/` | isolate | Useful research/playground material; should not be considered core runtime. |
 | generated | `node_modules/`, `.pnpm-store/`, `dist/`, `build/`, `*.tsbuildinfo`, coverage output | ignore | Generated/dependency/build output. Keep ignored and out of publish branches. |

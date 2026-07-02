@@ -37,7 +37,6 @@ Read these before proposing implementation:
 2. `docs/0000_ARCHITECTURE_CONSTITUTION.md`
 3. `docs/ATLAS-0001_ARTIFICIAL_MIND.md`
 4. every accepted RFC in `rfcs/`
-5. every philosophy note in `philosophy/`
 
 ## Responsibilities
 
@@ -105,7 +104,9 @@ An RFC is accepted only when it supports the ATLAS philosophy.
 
 ## Philosophy Track
 
-The `philosophy/` directory trains the Research Engineer how to think.
+The standalone `philosophy/` directory has been removed from the public
+repository cleanup path. Preserve the research posture through `AGENTS.md`, the
+Architecture Constitution, and accepted RFCs instead.
 
 These documents are not API specifications.
 

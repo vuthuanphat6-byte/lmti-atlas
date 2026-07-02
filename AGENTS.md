@@ -83,8 +83,8 @@ Stabilize memory, context routing, privacy, verification, and lesson capture.
 During local-alpha work, do not create production framework claims or deeply
 refactor runtime logic unless the task explicitly asks for it.
 
-Read the current README, naming clarification, host-project boundary, RFCs, and
-philosophy notes first.
+Read the current README, naming clarification, host-project boundary, and RFCs
+first.
 
 For every proposal:
 
